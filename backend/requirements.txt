@@ -1,0 +1,14 @@
+alembic
+fastapi
+httpx
+jinja2
+pillow
+psycopg[binary]
+pypdf
+python-multipart
+python-docx
+redis
+reportlab
+rq
+sqlalchemy
+uvicorn

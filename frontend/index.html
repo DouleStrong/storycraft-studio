@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StoryCraft Studio</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="grain"></div>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Storycraft Studio</p>
+          <h1>章节故事创作平台</h1>
+        </div>
+        <div class="topbar-actions">
+          <div id="sessionBadge" class="session-badge hidden"></div>
+          <button id="newCharacterButton" class="primary-button hidden">新建角色</button>
+          <button id="logoutButton" class="ghost-button hidden">退出登录</button>
+        </div>
+      </header>
+
+      <section id="authPanel" class="auth-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">沉浸式写作</p>
+          <h2>把角色、章节、剧照放进同一个创作空间。</h2>
+          <p>
+            从角色卡开始，逐步生成章节、场景与插图，最后导出一份完整的图文成品。
+          </p>
+        </div>
+
+        <div class="auth-card">
+          <div class="tabs">
+            <button class="tab-button active" type="button" data-auth-mode="register">注册</button>
+            <button class="tab-button" type="button" data-auth-mode="login">登录</button>
+          </div>
+
+          <p id="authFeedback" class="form-feedback hidden" role="status" aria-live="polite"></p>
+
+          <form id="authForm" class="stack-form" novalidate>
+            <label>
+              <span>邮箱</span>
+              <input id="authEmail" name="email" type="email" placeholder="writer@example.com" required />
+            </label>
+            <label>
+              <span>密码</span>
+              <input id="authPassword" name="password" type="password" minlength="8" required />
+            </label>
+            <label id="penNameField">
+              <span>笔名</span>
+              <input id="authPenName" name="penName" type="text" placeholder="请输入笔名，例如：青灯" required />
+            </label>
+            <button class="primary-button" type="submit" id="authSubmitButton">创建账号</button>
+          </form>
+        </div>
+      </section>
+
+      <main id="dashboardShell" class="dashboard hidden">
+        <section class="console-hero panel">
+          <div class="console-copy">
+            <p class="eyebrow">创作控制台</p>
+            <h2>先选故事，再进入只属于它的独立工作空间。</h2>
+            <p class="console-intro">
+              在这里创建项目、整理书架、浏览你的角色资产。进入项目后，中栏只保留当前作品的章节、场景和协作轨迹，让创作更专注。
+            </p>
+            <div id="dashboardMetrics" class="console-metrics"></div>
+          </div>
+
+          <form id="projectForm" class="stack-form compact console-form">
+            <div class="console-form-header">
+              <p class="eyebrow">新建项目</p>
+              <h3>创建一部新的章节故事</h3>
+            </div>
+            <input name="title" placeholder="作品名称" required />
+            <input name="genre" placeholder="题材，例如 都市悬疑" required />
+            <input name="tone" placeholder="气质，例如 克制、电影感" required />
+            <input name="era" placeholder="时代，例如 当代 / 近未来" required />
+            <input name="target_chapter_count" type="number" min="1" max="24" placeholder="目标章节数，例如 8" required />
+            <input name="target_length" placeholder="目标篇幅，例如 8章，短剧节奏" required />
+            <textarea name="logline" rows="4" placeholder="一句话设定 / 作品 logline" required></textarea>
+            <button class="primary-button" type="submit">创建并进入工作空间</button>
+          </form>
+        </section>
+
+        <section class="dashboard-grid">
+          <section class="panel console-project-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">项目书架</p>
+                <h3>选择项目进入独立工作空间</h3>
+              </div>
+              <button id="refreshProjectsButton" class="ghost-button">刷新项目</button>
+            </div>
+            <div id="projectList" class="project-grid"></div>
+          </section>
+
+          <aside class="panel console-side-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">角色资产</p>
+                <h3>全局角色库</h3>
+              </div>
+            </div>
+            <div id="dashboardLibrarySummary" class="console-library-card"></div>
+          </aside>
+        </section>
+      </main>
+
+      <main id="workspaceShell" class="workspace-shell hidden">
+        <div id="emptyState" class="empty-state hidden">
+          <p class="eyebrow">项目未就绪</p>
+          <h2>这个工作空间还没有加载到有效作品。</h2>
+          <button id="returnToDashboardButton" class="ghost-button" type="button">返回控制台</button>
+        </div>
+
+        <div id="projectWorkspace" class="project-workspace hidden" data-layout-mode="wide">
+          <section class="workspace-masthead panel">
+            <div>
+              <p class="eyebrow">沉浸式工作空间</p>
+              <h3 id="workspaceHeading">独立项目创作中</h3>
+            </div>
+            <div class="inline-actions">
+              <button id="backToDashboardButton" class="ghost-button" type="button">返回控制台</button>
+              <button id="refreshWorkspaceButton" class="ghost-button" type="button">刷新当前作品</button>
+            </div>
+          </section>
+
+          <section id="exportReadyBanner" class="export-ready-banner panel hidden"></section>
+
+          <section id="projectHero" class="project-hero">
+            <div id="projectHeroMeta" class="project-hero-meta"></div>
+            <div class="project-hero-nav">
+              <div class="project-hero-nav-header">
+                <div>
+                  <p class="eyebrow">章节导航</p>
+                  <h3>切换章节</h3>
+                </div>
+                <div class="inline-actions">
+                  <button id="createSnapshotButton" class="ghost-button">创建快照</button>
+                  <button id="duplicateProjectButton" class="ghost-button">复制项目</button>
+                  <button id="generateOutlineButton" class="primary-button">生成章节大纲</button>
+                  <button id="exportBundleButton" class="ghost-button">导出成品</button>
+                </div>
+              </div>
+              <div id="chapterTabs" class="chapter-tabs chapter-tabs-hero"></div>
+            </div>
+          </section>
+
+          <div class="workspace-grid">
+            <div class="column stack asset-column">
+              <section class="subpanel rail-panel story-bible-panel">
+                <div class="subpanel-header">
+                  <div>
+                    <p class="eyebrow">Story Bible</p>
+                    <h3>设定中枢</h3>
+                  </div>
+                </div>
+                <div id="storyBiblePanel" class="story-bible-shell"></div>
+              </section>
+
+              <section class="subpanel rail-panel asset-panel">
+                <div class="subpanel-header">
+                  <div>
+                    <p class="eyebrow">角色库</p>
+                    <h3>角色设定</h3>
+                  </div>
+                  <div class="inline-actions">
+                    <button id="openCharacterLibraryButton" class="ghost-button">角色库</button>
+                  </div>
+                </div>
+                <div id="characterLibrarySummary" class="panel-note asset-panel-summary"></div>
+                <div class="asset-scroll-shell">
+                  <div id="characterPanelScroll" class="asset-scroll-region">
+                    <div id="characterList" class="entity-list character-stack"></div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <div class="column wide stack story-column">
+              <section class="subpanel stage-panel">
+                <div id="chapterDetail" class="chapter-detail"></div>
+                <div id="chapterPager" class="chapter-pager"></div>
+              </section>
+            </div>
+
+            <div class="column stack rail-column">
+              <section class="subpanel rail-panel agent-panel">
+                <div class="subpanel-header">
+                  <div>
+                    <p class="eyebrow">Agent 面板</p>
+                    <h3>任务、轨迹与导出</h3>
+                  </div>
+                </div>
+                <div id="jobList" class="job-list"></div>
+                <div id="jobTrace" class="trace-panel"></div>
+                <div id="exportList" class="job-list exports"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div id="characterModal" class="modal-shell hidden">
+      <div class="modal-backdrop" data-close-character-modal></div>
+      <section class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">角色协作</p>
+            <h3>角色库与作品挂接</h3>
+          </div>
+          <button id="closeCharacterModalButton" class="ghost-button">关闭</button>
+        </div>
+        <div class="tabs modal-tabs">
+          <button class="tab-button active" data-character-modal-tab="create">新建角色</button>
+          <button class="tab-button" data-character-modal-tab="library">角色库</button>
+        </div>
+
+        <section id="characterCreatePane" class="modal-pane">
+          <p id="characterCreateHint" class="panel-note"></p>
+          <form id="characterCreateForm" class="stack-form compact">
+            <input name="name" placeholder="角色姓名" required />
+            <input name="role" placeholder="角色身份" required />
+            <textarea name="personality" rows="2" placeholder="性格关键词" required></textarea>
+            <textarea name="goal" rows="2" placeholder="角色目标" required></textarea>
+            <textarea name="speech_style" rows="2" placeholder="说话方式" required></textarea>
+            <textarea name="appearance" rows="2" placeholder="外貌描述" required></textarea>
+            <textarea name="relationships" rows="2" placeholder="人物关系" required></textarea>
+            <label class="file-field">
+              <span>参考图</span>
+              <input name="reference_image" type="file" accept="image/*" />
+            </label>
+            <label class="toggle-field">
+              <input id="attachCharacterToProject" name="attach_to_project" type="checkbox" checked />
+              <span id="attachCharacterLabel">创建后加入当前作品</span>
+            </label>
+            <button class="primary-button" type="submit">保存到角色库</button>
+          </form>
+        </section>
+
+        <section id="characterLibraryPane" class="modal-pane hidden">
+          <p id="characterLibraryHint" class="panel-note"></p>
+          <div id="characterLibraryList" class="entity-list modal-library-list"></div>
+        </section>
+      </section>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
