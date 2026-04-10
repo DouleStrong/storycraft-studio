@@ -12,6 +12,7 @@ import { describeReadyExport } from "./export-feedback.mjs";
 import { buildIllustrationRequestPayload, resolveFeaturedIllustration } from "./illustration-workbench.mjs";
 import { describeJobFeedback } from "./job-feedback.mjs";
 import { captureScrollState, restoreScrollState } from "./scroll-state.mjs";
+import { buildStoryBibleWorkbench } from "./story-bible-workbench.mjs";
 import { resolveWorkflowProgress } from "./workflow-progress.mjs";
 import { computeWorkspaceHeight, resolveWorkspaceDensity } from "./workspace-layout.mjs";
 import {
@@ -87,16 +88,22 @@ const els = {
   workspaceGrid: document.querySelector(".workspace-grid"),
   projectHero: document.getElementById("projectHero"),
   projectHeroMeta: document.getElementById("projectHeroMeta"),
+  deleteProjectButton: document.getElementById("deleteProjectButton"),
+  openStoryBibleButton: document.getElementById("openStoryBibleButton"),
   storyBiblePanel: document.getElementById("storyBiblePanel"),
   projectWorkspace: document.getElementById("projectWorkspace"),
   characterPanelScroll: document.getElementById("characterPanelScroll"),
   agentPanel: document.querySelector(".agent-panel"),
+  agentFocus: document.getElementById("agentFocus"),
   emptyState: document.getElementById("emptyState"),
   characterLibrarySummary: document.getElementById("characterLibrarySummary"),
   openCharacterLibraryButton: document.getElementById("openCharacterLibraryButton"),
   characterList: document.getElementById("characterList"),
   characterModal: document.getElementById("characterModal"),
   closeCharacterModalButton: document.getElementById("closeCharacterModalButton"),
+  storyBibleModal: document.getElementById("storyBibleModal"),
+  closeStoryBibleModalButton: document.getElementById("closeStoryBibleModalButton"),
+  storyBibleDetail: document.getElementById("storyBibleDetail"),
   characterCreatePane: document.getElementById("characterCreatePane"),
   characterLibraryPane: document.getElementById("characterLibraryPane"),
   characterCreateHint: document.getElementById("characterCreateHint"),
@@ -276,6 +283,81 @@ function renderStoryBibleRevisionDiff(diff) {
           .join("")}
       </div>
     </article>
+  `;
+}
+
+function renderStoryBibleDetailMarkup(project, workbench, activeStoryBibleDiff) {
+  const currentRevision = workbench.detail.currentRevision;
+  const revisionCards = state.storyBibleRevisions.length
+    ? state.storyBibleRevisions
+        .slice(0, 6)
+        .map(
+          (revision) => `
+            <article class="revision-card ${currentRevision?.id === revision.id ? "is-current" : ""}">
+              <div class="revision-card-head">
+                <strong>设定版本 #${escapeHtml(revision.revision_index || revision.id)}</strong>
+                <span class="mini-chip">${escapeHtml(revision.created_by || "system")}</span>
+              </div>
+              <p class="muted">${escapeHtml(revision.created_at ? new Date(revision.created_at).toLocaleString() : "刚刚")}</p>
+              <div class="inline-actions">
+                <button class="ghost-button" type="button" data-view-story-bible-diff="${revision.id}">
+                  ${state.activeStoryBibleDiffId === revision.id ? "收起差异" : "查看差异"}
+                </button>
+              </div>
+            </article>
+          `,
+        )
+        .join("")
+    : `<p class="muted">当前还没有设定修订历史。</p>`;
+
+  return `
+    <div class="story-bible-detail-shell">
+      <section class="story-bible-meta story-bible-detail-meta">
+        <div class="chip-row">
+          <span class="status-chip">${escapeHtml(workbench.summary.currentRevisionLabel)}</span>
+          <span class="mini-chip">${escapeHtml(workbench.summary.targetChapterLabel)}</span>
+          <span class="mini-chip">${escapeHtml(workbench.summary.targetLengthLabel)}</span>
+          <span class="mini-chip">${escapeHtml(workbench.summary.ruleCountLabel)}</span>
+        </div>
+        <p class="muted">${escapeHtml(workbench.summary.helperText)}</p>
+      </section>
+
+      <div class="story-bible-detail-layout">
+        <form id="storyBibleForm" class="stack-form compact story-bible-form story-bible-detail-form">
+          <label>
+            <span>世界观</span>
+            <textarea name="world_notes" rows="4">${escapeHtml(workbench.detail.worldNotes)}</textarea>
+          </label>
+          <label>
+            <span>风格说明</span>
+            <textarea name="style_notes" rows="4">${escapeHtml(workbench.detail.styleNotes)}</textarea>
+          </label>
+          <label>
+            <span>写作禁忌 / 规则</span>
+            <textarea name="writing_rules_text" rows="5" placeholder="一行一条规则">${escapeHtml(workbench.detail.writingRulesText)}</textarea>
+          </label>
+          <label>
+            <span>称呼规则</span>
+            <textarea name="addressing_rules" rows="3">${escapeHtml(workbench.detail.addressingRules)}</textarea>
+          </label>
+          <label>
+            <span>时间线约束</span>
+            <textarea name="timeline_rules" rows="3">${escapeHtml(workbench.detail.timelineRules)}</textarea>
+          </label>
+          <div class="inline-actions">
+            <button class="primary-button" type="submit">保存设定版本</button>
+          </div>
+        </form>
+
+        <section class="revision-list story-bible-detail-history">
+          <div class="section-heading compact">
+            <h5>最近设定版本</h5>
+          </div>
+          ${revisionCards}
+          ${renderStoryBibleRevisionDiff(activeStoryBibleDiff)}
+        </section>
+      </div>
+    </div>
   `;
 }
 
@@ -526,6 +608,7 @@ function renderWorkspaceDynamicPanels() {
 
   renderChapterTabs(state.currentProject);
   renderChapterDetail(state.currentProject);
+  renderAgentFocusPanel(state.currentProject);
   renderJobList(state.currentProject);
   renderTracePanel();
   renderExports(state.currentProject);
@@ -888,6 +971,7 @@ function setCharacterModalMode(mode) {
 }
 
 function openCharacterModal(mode = "create") {
+  closeStoryBibleModal();
   setCharacterModalMode(mode);
   renderCharacterModal();
   els.characterModal.classList.remove("hidden");
@@ -895,6 +979,18 @@ function openCharacterModal(mode = "create") {
 
 function closeCharacterModal() {
   els.characterModal.classList.add("hidden");
+}
+
+function openStoryBibleModal() {
+  if (!state.currentProject) {
+    return;
+  }
+  closeCharacterModal();
+  els.storyBibleModal.classList.remove("hidden");
+}
+
+function closeStoryBibleModal() {
+  els.storyBibleModal.classList.add("hidden");
 }
 
 function renderCharacterModal() {
@@ -1171,85 +1267,38 @@ function renderDashboard() {
 }
 
 function renderStoryBiblePanel(project) {
-  const storyBible = project.story_bible || {
-    world_notes: "",
-    style_notes: "",
-    writing_rules: [],
-    addressing_rules: "",
-    timeline_rules: "",
-    current_revision: null,
-  };
-  const currentRevision = storyBible.current_revision;
+  const workbench = buildStoryBibleWorkbench(project, {
+    storyBibleRevisions: state.storyBibleRevisions,
+  });
   const activeStoryBibleDiff = state.activeStoryBibleDiffId
     ? state.storyBibleDiffs[`${project.id}:${state.activeStoryBibleDiffId}`]
     : null;
-  const revisionCards = state.storyBibleRevisions.length
-    ? state.storyBibleRevisions
-        .slice(0, 4)
-        .map(
-          (revision) => `
-            <article class="revision-card ${currentRevision?.id === revision.id ? "is-current" : ""}">
-              <div class="revision-card-head">
-                <strong>设定版本 #${revision.revision_index || revision.id}</strong>
-                <span class="mini-chip">${escapeHtml(revision.created_by || "system")}</span>
-              </div>
-              <p class="muted">${escapeHtml(revision.created_at ? new Date(revision.created_at).toLocaleString() : "刚刚")}</p>
-              <div class="inline-actions">
-                <button class="ghost-button" type="button" data-view-story-bible-diff="${revision.id}">
-                  ${state.activeStoryBibleDiffId === revision.id ? "收起差异" : "查看差异"}
-                </button>
-              </div>
-            </article>
-          `,
-        )
-        .join("")
-    : `<p class="muted">当前还没有设定修订历史。</p>`;
+  const summaryChips = [
+    `<span class="mini-chip">${escapeHtml(workbench.summary.ruleCountLabel)}</span>`,
+    `<span class="mini-chip">${escapeHtml(workbench.summary.filledSectionLabel)}</span>`,
+  ]
+    .filter(Boolean)
+    .join("");
 
   els.storyBiblePanel.innerHTML = `
-    <div class="story-bible-meta">
-      <div class="chip-row">
-        ${
-          currentRevision
-            ? `<span class="status-chip">当前版本 #${escapeHtml(currentRevision.revision_index || currentRevision.id)}</span>`
-            : `<span class="status-chip">未记录版本</span>`
-        }
-        <span class="mini-chip">${escapeHtml(project.target_length || "")}</span>
+    <article class="asset-panel-summary story-bible-summary-card">
+      <div class="asset-summary-grid story-bible-summary-grid">
+        <article class="asset-summary-stat story-bible-summary-stat">
+          <strong>${escapeHtml(workbench.summary.currentRevisionLabel)}</strong>
+          <span>当前设定版本</span>
+        </article>
+        <article class="asset-summary-stat story-bible-summary-stat">
+          <strong>${escapeHtml(workbench.summary.targetChapterLabel)}</strong>
+          <span>目标章节</span>
+        </article>
       </div>
-      <p class="muted">所有新的大纲、正文和场景任务都会绑定当前设定版本。旧章节不会被追溯改写。</p>
-    </div>
-    <form id="storyBibleForm" class="stack-form compact story-bible-form">
-      <label>
-        <span>世界观</span>
-        <textarea name="world_notes" rows="3">${escapeHtml(storyBible.world_notes || "")}</textarea>
-      </label>
-      <label>
-        <span>风格说明</span>
-        <textarea name="style_notes" rows="3">${escapeHtml(storyBible.style_notes || "")}</textarea>
-      </label>
-      <label>
-        <span>写作禁忌 / 规则</span>
-        <textarea name="writing_rules_text" rows="4" placeholder="一行一条规则">${escapeHtml((storyBible.writing_rules || []).join("\n"))}</textarea>
-      </label>
-      <label>
-        <span>称呼规则</span>
-        <textarea name="addressing_rules" rows="2">${escapeHtml(storyBible.addressing_rules || "")}</textarea>
-      </label>
-      <label>
-        <span>时间线约束</span>
-        <textarea name="timeline_rules" rows="2">${escapeHtml(storyBible.timeline_rules || "")}</textarea>
-      </label>
-      <div class="inline-actions">
-        <button class="primary-button" type="submit">保存设定版本</button>
+      <div class="chip-row asset-summary-chips">
+        ${summaryChips}
       </div>
-    </form>
-    <section class="revision-list">
-      <div class="section-heading compact">
-        <h5>最近设定版本</h5>
-      </div>
-      ${revisionCards}
-      ${renderStoryBibleRevisionDiff(activeStoryBibleDiff)}
-    </section>
+    </article>
   `;
+
+  els.storyBibleDetail.innerHTML = renderStoryBibleDetailMarkup(project, workbench, activeStoryBibleDiff);
 }
 
 function protectedContentLabel(chapter) {
@@ -1384,22 +1433,35 @@ function renderChapterTabs(project) {
     .map((chapter) => {
       const pendingIntervention = findPendingIntervention(chapter);
       const liveJob = findLiveChapterJob(chapter.id);
-      const chips = [
-        `<span class="mini-chip">${escapeHtml(formatChapterStatus(chapter.status))}</span>`,
-        chapter.is_locked ? `<span class="mini-chip is-locked">已锁</span>` : "",
-        pendingIntervention ? `<span class="mini-chip is-warn">待处理</span>` : "",
-        liveJob ? `<span class="mini-chip is-live">进行中</span>` : "",
+      const subtitle = [
+        formatChapterStatus(chapter.status),
+        chapter.is_locked ? "已锁" : "",
+        pendingIntervention ? "待确认" : "",
+        liveJob ? "进行中" : "",
       ]
         .filter(Boolean)
-        .join("");
+        .join(" · ");
+      const stateClass = pendingIntervention
+        ? "is-warn"
+        : liveJob
+          ? "is-live"
+          : chapter.is_locked
+            ? "is-locked"
+            : chapter.status === "scenes_ready"
+              ? "is-ready"
+              : "";
 
       return `
         <button
           class="chapter-tab ${chapter.id === state.activeChapterId ? "active" : ""}"
           data-select-chapter="${chapter.id}"
         >
-          <span class="chapter-tab-title">第 ${chapter.order_index} 章 · ${escapeHtml(chapter.title)}</span>
-          <span class="chapter-tab-meta">${chips}</span>
+          <span class="chapter-tab-index">${String(chapter.order_index).padStart(2, "0")}</span>
+          <span class="chapter-tab-copy">
+            <span class="chapter-tab-title">${escapeHtml(chapter.title)}</span>
+            <span class="chapter-tab-subtitle">${escapeHtml(subtitle)}</span>
+          </span>
+          <span class="chapter-tab-state ${stateClass}" aria-hidden="true"></span>
         </button>
       `;
     })
@@ -1922,63 +1984,84 @@ function renderJobList(project) {
     selectedJobDetail: state.selectedJobDetail,
     activeChapterId: state.activeChapterId,
   });
+  const historyMarkup = workbench.history.length
+    ? `
+        <div class="agent-history-list">
+          ${workbench.history
+            .map(
+              (item) => `
+                <button
+                  class="agent-history-item ${item.isSelected ? "active" : ""} ${item.isFocus ? "is-focus" : ""}"
+                  type="button"
+                  data-select-job="${item.jobId}"
+                >
+                  <span class="agent-history-rail" aria-hidden="true">
+                    <span class="agent-history-dot is-${item.tone}"></span>
+                  </span>
+                  <span class="agent-history-body">
+                    <span class="agent-history-top">
+                      <strong>${escapeHtml(item.title)}</strong>
+                      <span class="mini-chip ${item.tone === "warn" ? "is-warn" : item.tone === "success" ? "is-live" : ""}">
+                        ${escapeHtml(item.statusLabel)}
+                      </span>
+                    </span>
+                    ${item.chapterLabel ? `<span class="agent-history-chapter">${escapeHtml(item.chapterLabel)}</span>` : ""}
+                    <span class="agent-history-summary">${escapeHtml(item.summary)}</span>
+                    <span class="agent-history-meta">
+                      ${item.currentStepLabel ? `<span>${escapeHtml(item.currentStepLabel)}</span>` : ""}
+                      ${item.progressLabel ? `<span>${escapeHtml(item.progressLabel)}</span>` : ""}
+                    </span>
+                  </span>
+                </button>
+              `,
+            )
+            .join("")}
+        </div>
+      `
+    : `<div class="job-card job-card-empty"><p class="muted">生成大纲后，右侧会开始沉淀 Agent 的协作历史。</p></div>`;
+
+  els.jobList.innerHTML = `
+    <section class="agent-history-shell agent-surface">
+      <div class="agent-section-head">
+        <div>
+          <p class="eyebrow">历史轨迹</p>
+          <h4>最近协作记录</h4>
+        </div>
+        <div class="chip-row">
+          ${
+            workbench.summary.activeJobs
+              ? `<span class="mini-chip is-live">${escapeHtml(`${workbench.summary.activeJobs} 条进行中`)}</span>`
+              : ""
+          }
+          ${
+            workbench.summary.awaitingJobs
+              ? `<span class="mini-chip is-warn">${escapeHtml(`${workbench.summary.awaitingJobs} 条待确认`)}</span>`
+              : ""
+          }
+          <span class="mini-chip">${escapeHtml(`${workbench.summary.totalJobs} 条任务`)}</span>
+        </div>
+      </div>
+      ${historyMarkup}
+    </section>
+  `;
+}
+
+function renderAgentFocusPanel(project) {
+  const workbench = buildAgentWorkbench(project, {
+    selectedJobDetail: state.selectedJobDetail,
+    activeChapterId: state.activeChapterId,
+  });
   const focus = workbench.focus;
   const focusJob = project.jobs.find((job) => Number(job.id) === Number(focus.jobId)) || null;
   const focusActions = [
     focus.chapterId ? `<button class="ghost-button" data-select-chapter="${focus.chapterId}">定位章节</button>` : "",
-    focus.jobId ? `<button class="primary-button" data-select-job="${focus.jobId}">打开轨迹</button>` : "",
+    focus.jobId ? `<button class="primary-button" data-select-job="${focus.jobId}">展开轨迹</button>` : "",
+    focusJob?.status === "failed" ? `<button class="ghost-button" data-retry-job="${focusJob.id}">重试任务</button>` : "",
   ]
     .filter(Boolean)
     .join("");
 
-  const queueCards = project.jobs.length
-    ? project.jobs
-        .map((job) => {
-          const isSelected = job.id === state.selectedJobId;
-          const jobFeedback = describeJobFeedback(job);
-          const workflowProgress = resolveWorkflowProgress(job);
-          return `
-            <article class="job-card ${isSelected ? "active" : ""} ${job.status === "awaiting_user" ? "needs-attention" : ""}">
-              <div class="job-card-header">
-                <div class="job-card-title-group">
-                  <h4>${escapeHtml(formatJobType(job.job_type))}</h4>
-                  <p class="job-status ${job.status}">${escapeHtml(formatJobStatus(job.status))}</p>
-                </div>
-                <span class="mini-chip">#${job.id}</span>
-              </div>
-              <div class="job-progress-bar" aria-hidden="true">
-                <span class="job-progress-fill ${job.status}" style="width: ${Math.max(4, Math.min(100, Number(job.progress || 0)))}%"></span>
-              </div>
-              ${
-                workflowProgress.currentStepLabel
-                  ? `<p class="muted">步骤：${escapeHtml(workflowProgress.currentStepLabel)}</p>`
-                  : ""
-              }
-              ${jobFeedback.message ? `<p class="job-live-note">${escapeHtml(jobFeedback.message)}</p>` : ""}
-              ${job.status_message ? `<p class="muted">${escapeHtml(job.status_message)}</p>` : ""}
-              ${job.error_message ? `<p class="muted">${escapeHtml(job.error_message)}</p>` : ""}
-              <div class="job-card-footer">
-                <div class="chip-row">
-                  <span class="mini-chip">${job.progress}%</span>
-                  ${job.chapter_id ? `<span class="mini-chip">章节 ${escapeHtml(job.chapter_id)}</span>` : ""}
-                </div>
-                <div class="inline-actions compact-inline-actions">
-                  <button class="ghost-button" data-select-job="${job.id}">查看轨迹</button>
-                  ${job.status === "failed" ? `<button class="ghost-button" data-retry-job="${job.id}">重试</button>` : ""}
-                  ${
-                    isTerminalJobStatus(job.status)
-                      ? `<button class="ghost-button danger-button" data-delete-job="${job.id}">删除</button>`
-                      : ""
-                  }
-                </div>
-              </div>
-            </article>
-          `;
-        })
-        .join("")
-    : `<div class="job-card job-card-empty"><p class="muted">生成大纲后，这里会开始排队显示 Planner、Writer、Reviewer 和导出任务。</p></div>`;
-
-  els.jobList.innerHTML = `
+  els.agentFocus.innerHTML = `
     <section class="agent-focus-card agent-surface is-${escapeHtml(focus.tone)}">
       <div class="agent-focus-header">
         <div>
@@ -1998,48 +2081,20 @@ function renderJobList(project) {
       }
       <div class="agent-focus-meta">
         ${focus.progressLabel ? `<span class="mini-chip">${escapeHtml(focus.progressLabel)}</span>` : ""}
-        <span class="mini-chip">${escapeHtml(`${workbench.summary.totalJobs} 条任务`)}</span>
-        ${
-          workbench.summary.awaitingJobs
-            ? `<span class="mini-chip is-warn">${escapeHtml(`${workbench.summary.awaitingJobs} 条待确认`)}</span>`
-            : ""
-        }
         ${
           workbench.summary.activeJobs
-            ? `<span class="mini-chip is-live">${escapeHtml(`${workbench.summary.activeJobs} 条进行中`)}</span>`
+            ? `<span class="mini-chip is-live">${escapeHtml(`${workbench.summary.activeJobs} 条正在协作`)}</span>`
             : ""
         }
+        ${
+          workbench.summary.awaitingJobs
+            ? `<span class="mini-chip is-warn">${escapeHtml(`${workbench.summary.awaitingJobs} 条等待你确认`)}</span>`
+            : ""
+        }
+        ${workbench.summary.completedJobs ? `<span class="mini-chip">${escapeHtml(`${workbench.summary.completedJobs} 条已完成`)}</span>` : ""}
       </div>
       ${focusJob ? renderWorkflowStageRail(focusJob) : ""}
       ${focusActions ? `<div class="agent-focus-actions inline-actions">${focusActions}</div>` : ""}
-    </section>
-
-    <section class="agent-queue-shell agent-surface">
-      <div class="agent-section-head">
-        <div>
-          <p class="eyebrow">任务队列</p>
-          <h4>谁在推进当前作品</h4>
-        </div>
-        <div class="agent-queue-metrics">
-          <article class="agent-mini-metric">
-            <strong>${workbench.summary.activeJobs}</strong>
-            <span>进行中</span>
-          </article>
-          <article class="agent-mini-metric">
-            <strong>${workbench.summary.awaitingJobs}</strong>
-            <span>待确认</span>
-          </article>
-          <article class="agent-mini-metric">
-            <strong>${workbench.summary.completedJobs}</strong>
-            <span>完成</span>
-          </article>
-          <article class="agent-mini-metric">
-            <strong>${workbench.summary.failedJobs}</strong>
-            <span>失败</span>
-          </article>
-        </div>
-      </div>
-      <div class="job-list job-queue-list">${queueCards}</div>
     </section>
   `;
 }
@@ -2319,13 +2374,19 @@ function renderProjectWorkspace() {
     els.chapterTabs.innerHTML = "";
     els.chapterDetail.innerHTML = "";
     els.chapterPager.innerHTML = "";
+    els.agentFocus.innerHTML = "";
     els.jobList.innerHTML = "";
     els.jobTrace.innerHTML = "";
     els.exportList.innerHTML = "";
     els.projectHeroMeta.innerHTML = "";
+    els.deleteProjectButton.dataset.deleteProject = "";
+    els.deleteProjectButton.disabled = true;
+    els.openStoryBibleButton.disabled = true;
     els.storyBiblePanel.innerHTML = "";
+    els.storyBibleDetail.innerHTML = "";
     els.characterLibrarySummary.textContent = `全局角色库 ${state.characterLibrary.length} 个`;
     els.workspaceHeading.textContent = "独立项目创作中";
+    closeStoryBibleModal();
     renderCharacterModal();
     updateAuthUI();
     restoreScrollState(preservedScrollState, (key) => getWorkspaceScrollTargets()[key]);
@@ -2336,6 +2397,8 @@ function renderProjectWorkspace() {
   els.emptyState.classList.add("hidden");
   els.projectWorkspace.classList.remove("hidden");
   els.projectWorkspace.dataset.layoutMode = state.layoutMode;
+  els.deleteProjectButton.disabled = false;
+  els.openStoryBibleButton.disabled = false;
   els.workspaceHeading.textContent = `《${project.title}》工作空间`;
   els.projectHero.style.backgroundImage = project.cover_image_url ? `url(${project.cover_image_url})` : "";
   els.projectHeroMeta.innerHTML = `
@@ -2347,16 +2410,15 @@ function renderProjectWorkspace() {
       <span class="status-chip">${escapeHtml(project.target_length)}</span>
       <span class="status-chip">${escapeHtml(project.status)}</span>
     </div>
-    <div class="inline-actions" style="margin-top: 16px;">
-      <button class="ghost-button danger-button" data-delete-project="${project.id}">删除作品</button>
-    </div>
   `;
+  els.deleteProjectButton.dataset.deleteProject = String(project.id);
 
   renderStoryBiblePanel(project);
   renderCharacters(project);
   renderCharacterModal();
   renderChapterTabs(project);
   renderChapterDetail(project);
+  renderAgentFocusPanel(project);
   renderJobList(project);
   renderTracePanel();
   renderExports(project);
@@ -2666,8 +2728,16 @@ els.openCharacterLibraryButton.addEventListener("click", () => {
   openCharacterModal("library");
 });
 
+els.openStoryBibleButton.addEventListener("click", () => {
+  openStoryBibleModal();
+});
+
 els.closeCharacterModalButton.addEventListener("click", () => {
   closeCharacterModal();
+});
+
+els.closeStoryBibleModalButton.addEventListener("click", () => {
+  closeStoryBibleModal();
 });
 
 characterModalTabButtons.forEach((button) => {
@@ -2899,7 +2969,7 @@ document.addEventListener("click", async (event) => {
   }
 
   const action = target.closest(
-    "[data-open-project], [data-delete-project], [data-open-character-modal], [data-attach-character], [data-detach-character], [data-delete-library-character], [data-close-character-modal], [data-generate-draft], " +
+    "[data-open-project], [data-delete-project], [data-open-character-modal], [data-open-story-bible-modal], [data-attach-character], [data-detach-character], [data-delete-library-character], [data-close-character-modal], [data-close-story-bible-modal], [data-generate-draft], " +
       "[data-generate-scenes], [data-generate-illustrations], [data-select-illustration], [data-mark-canonical], [data-delete-illustration], " +
       "[data-delete-export], [data-dismiss-export-banner], [data-delete-job], [data-lock-chapter], [data-select-chapter], [data-select-job], " +
       "[data-retry-intervention], [data-dismiss-intervention], [data-character-modal-tab], [data-restore-revision], [data-view-story-bible-diff], [data-view-chapter-diff], [data-edit-block], [data-save-block], [data-cancel-block], [data-toggle-block-lock], [data-edit-scene], [data-save-scene], [data-cancel-scene], [data-toggle-scene-lock], [data-edit-dialogue], [data-save-dialogue], [data-cancel-dialogue], [data-toggle-dialogue-lock], [data-retry-job]",
@@ -2921,8 +2991,18 @@ document.addEventListener("click", async (event) => {
       return;
     }
 
+    if (dataset.openStoryBibleModal !== undefined) {
+      openStoryBibleModal();
+      return;
+    }
+
     if (dataset.closeCharacterModal !== undefined) {
       closeCharacterModal();
+      return;
+    }
+
+    if (dataset.closeStoryBibleModal !== undefined) {
+      closeStoryBibleModal();
       return;
     }
 

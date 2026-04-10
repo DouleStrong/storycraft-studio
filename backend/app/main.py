@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 from .auth import get_current_user, get_db_session, hash_password, issue_token, verify_password
 from .config import load_settings, review_intervention_min_severity
 from .database import create_engine_and_session_factory
+from .langfuse_tracing import LangfuseTracingClient
 from .migrations import run_migrations
 from .models import (
     Chapter,
@@ -102,6 +103,7 @@ def create_app(
     *,
     story_agents: StoryAgentPipeline | None = None,
     task_queue: TaskQueue | None = None,
+    langfuse_tracer=None,
 ) -> FastAPI:
     settings = load_settings()
     frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
@@ -122,10 +124,12 @@ def create_app(
 
     injected_story_agents = story_agents is not None
     story_agents = story_agents or StoryAgentPipeline.from_settings(settings)
+    langfuse_tracer = langfuse_tracer or LangfuseTracingClient.from_settings(settings)
     workflow_runner = WorkflowRunner(
         session_factory,
         asset_store,
         story_agents,
+        langfuse_tracer=langfuse_tracer,
         review_intervention_min_severity=review_intervention_min_severity(settings),
     )
 
@@ -153,6 +157,7 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.asset_store = asset_store
     app.state.story_agents = story_agents
+    app.state.langfuse_tracer = langfuse_tracer
     app.state.workflow_runner = workflow_runner
     app.state.task_queue = task_queue
 

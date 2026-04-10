@@ -8,6 +8,7 @@ from rq import Queue, Worker
 
 from .config import load_settings, review_intervention_min_severity
 from .database import create_engine_and_session_factory
+from .langfuse_tracing import LangfuseTracingClient
 from .migrations import run_migrations
 from .models import GenerationJob
 from .providers import StoryAgentPipeline
@@ -42,6 +43,7 @@ def get_workflow_runner() -> WorkflowRunner:
         session_factory,
         asset_store,
         StoryAgentPipeline.from_settings(settings),
+        langfuse_tracer=LangfuseTracingClient.from_settings(settings),
         review_intervention_min_severity=review_intervention_min_severity(settings),
     )
     return _workflow_runner

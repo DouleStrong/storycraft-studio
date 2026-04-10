@@ -10,6 +10,35 @@ import time
 
 import httpx
 
+from .config import Settings, load_settings
+
+
+def freeze_story_flow_environment(settings: Settings, tmpdir: str) -> dict[str, str]:
+    return {
+        "STORY_PLATFORM_SKIP_DOTENV": "1",
+        "STORY_PLATFORM_ALLOW_SQLITE": "1",
+        "STORY_PLATFORM_DB_URL": f"sqlite:///{tmpdir}/storycraft_smoke.db",
+        "STORY_PLATFORM_STORAGE_DIR": f"{tmpdir}/storage",
+        "STORY_PLATFORM_EXPORT_DIR": f"{tmpdir}/exports",
+        "STORY_PLATFORM_QUEUE_BACKEND": "inline",
+        "OPENAI_BASE_URL": settings.openai_base_url or "",
+        "OPENAI_API_KEY": settings.openai_api_key or "",
+        "OPENAI_MODEL": settings.openai_model,
+        "STORY_AGENT_PLANNER_MODEL": settings.story_agent_planner_model or "",
+        "STORY_AGENT_WRITER_MODEL": settings.story_agent_writer_model or "",
+        "STORY_AGENT_REVIEWER_MODEL": settings.story_agent_reviewer_model or "",
+        "STORY_AGENT_VISUAL_MODEL": settings.story_agent_visual_model or "",
+        "STORY_AGENT_IMAGE_MODEL": settings.story_agent_image_model or "",
+        "STORY_AGENT_IMAGE_SIZE": settings.story_agent_image_size,
+        "STORY_AGENT_TIMEOUT_SECONDS": str(settings.story_agent_timeout_seconds),
+        "STORY_REVIEW_INTERVENTION_MIN_SEVERITY": settings.story_review_intervention_min_severity,
+        "LANGFUSE_BASE_URL": getattr(settings, "langfuse_base_url", "") or "",
+        "LANGFUSE_PUBLIC_KEY": getattr(settings, "langfuse_public_key", "") or "",
+        "LANGFUSE_SECRET_KEY": getattr(settings, "langfuse_secret_key", "") or "",
+        "LANGFUSE_PROMPT_LABEL": getattr(settings, "langfuse_prompt_label", "production"),
+        "LANGFUSE_PROMPT_CACHE_TTL_SECONDS": str(getattr(settings, "langfuse_prompt_cache_ttl_seconds", 300)),
+    }
+
 
 def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
@@ -29,13 +58,9 @@ async def wait_for_job(client: httpx.AsyncClient, token: str, job_id: int, timeo
 
 
 async def run_flow(chapter_count: int, candidate_count: int, timeout: float) -> dict:
+    current_settings = load_settings()
     with tempfile.TemporaryDirectory(prefix="storycraft-real-smoke-") as tmpdir:
-        os.environ["STORY_PLATFORM_SKIP_DOTENV"] = "1"
-        os.environ["STORY_PLATFORM_ALLOW_SQLITE"] = "1"
-        os.environ["STORY_PLATFORM_DB_URL"] = f"sqlite:///{tmpdir}/storycraft_smoke.db"
-        os.environ["STORY_PLATFORM_STORAGE_DIR"] = f"{tmpdir}/storage"
-        os.environ["STORY_PLATFORM_EXPORT_DIR"] = f"{tmpdir}/exports"
-        os.environ["STORY_PLATFORM_QUEUE_BACKEND"] = "inline"
+        os.environ.update(freeze_story_flow_environment(current_settings, tmpdir))
 
         from app.main import create_app
 
@@ -63,6 +88,7 @@ async def run_flow(chapter_count: int, candidate_count: int, timeout: float) -> 
                     "genre": "Urban suspense short drama",
                     "tone": "restrained, cinematic, emotionally tense",
                     "era": "Contemporary",
+                    "target_chapter_count": chapter_count,
                     "target_length": f"{chapter_count} chapters",
                     "logline": "A late-night radio host receives a call from a missing witness and is forced to reopen an old case with a former partner.",
                 },

@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from .models import Chapter, Character, IllustrationAsset, Project, Scene
+from .prompt_registry import LangfusePromptRegistry, PromptResolution
 
 
 class LLMProviderError(RuntimeError):
@@ -440,24 +441,41 @@ class OpenAICompatibleImageClient:
                 size=size,
             )
         except LLMProviderError as exc:
-            if not self._should_fallback_to_single_candidate_requests(str(exc), candidate_count):
-                raise
-            if on_progress is not None:
-                on_progress(
-                    {
-                        "text": f"当前图像服务一次只接受 1 张候选，已改为顺序渲染 {candidate_count} 张剧照。",
-                        "progress": 72,
-                        "final": False,
-                    }
+            error_message = str(exc)
+            if self._should_fallback_to_single_candidate_requests(error_message, candidate_count):
+                if on_progress is not None:
+                    on_progress(
+                        {
+                            "text": f"当前图像服务一次只接受 1 张候选，已改为顺序渲染 {candidate_count} 张剧照。",
+                            "progress": 72,
+                            "final": False,
+                        }
+                    )
+                return self._generate_images_one_by_one(
+                    model=selected_model,
+                    prompt=prompt,
+                    candidate_count=candidate_count,
+                    size=size,
+                    on_progress=on_progress,
                 )
 
-        return self._generate_images_one_by_one(
-            model=selected_model,
-            prompt=prompt,
-            candidate_count=candidate_count,
-            size=size,
-            on_progress=on_progress,
-        )
+            if self._should_try_chat_completions_image_fallback(error_message):
+                if on_progress is not None:
+                    on_progress(
+                        {
+                            "text": "当前图像服务主图片接口不可用，已切换到兼容聊天出图通道继续渲染。",
+                            "progress": 72,
+                            "final": False,
+                        }
+                    )
+                return self._generate_images_via_chat_completions(
+                    model=selected_model,
+                    prompt=prompt,
+                    candidate_count=candidate_count,
+                    on_progress=on_progress,
+                )
+
+            raise
 
     def _generate_images_request(
         self,
@@ -490,6 +508,7 @@ class OpenAICompatibleImageClient:
                 "model": model,
                 "attempts": 1,
                 "usage": payload.get("usage", {}),
+                "endpoint": "images/generations",
             },
         }
 
@@ -546,7 +565,100 @@ class OpenAICompatibleImageClient:
                 "attempts": candidate_count,
                 "usage": aggregated_usage,
                 "fallback": "single-candidate-requests",
+                "endpoint": "images/generations",
             },
+        }
+
+    def _generate_images_via_chat_completions(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        candidate_count: int,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        images: list[GeneratedImagePayload] = []
+        aggregated_usage: dict[str, Any] = {}
+
+        for index in range(candidate_count):
+            ordinal = index + 1
+            if on_progress is not None:
+                progress = min(94, 72 + int(index * 20 / max(candidate_count, 1)))
+                on_progress(
+                    {
+                        "text": f"正在通过兼容聊天通道渲染第 {ordinal}/{candidate_count} 张候选剧照。",
+                        "progress": progress,
+                        "final": False,
+                    }
+                )
+
+            result = self._generate_single_image_via_chat_completion(model=model, prompt=prompt)
+            images.append(result["image"])
+            usage = result.get("usage", {})
+            for key, value in usage.items():
+                if isinstance(value, (int, float)):
+                    aggregated_usage[key] = aggregated_usage.get(key, 0) + value
+                else:
+                    aggregated_usage[key] = value
+
+            if on_progress is not None:
+                progress = min(95, 72 + int(ordinal * 20 / max(candidate_count, 1)))
+                on_progress(
+                    {
+                        "text": f"兼容聊天通道已完成第 {ordinal}/{candidate_count} 张候选剧照。",
+                        "progress": progress,
+                        "final": ordinal == candidate_count,
+                    }
+                )
+
+        return {
+            "images": images[:candidate_count],
+            "trace": {
+                "agent": "image_generation",
+                "model": model,
+                "attempts": candidate_count,
+                "usage": aggregated_usage,
+                "fallback": "chat-completions-image-links",
+                "endpoint": "chat/completions",
+            },
+        }
+
+    def _generate_single_image_via_chat_completion(self, *, model: str, prompt: str) -> dict[str, Any]:
+        response = _run_with_transport_retry(
+            action="Image chat fallback request",
+            operation=lambda: self._client.post(
+                "/chat/completions",
+                headers=self._headers,
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Generate one image for the following prompt and return the generated image result.\n\n"
+                                f"{prompt}"
+                            ),
+                        }
+                    ],
+                    "max_tokens": 400,
+                },
+            ),
+        )
+        payload = self._read_json_response(response)
+        try:
+            message_content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMProviderError("Image chat fallback did not include a completion message.") from exc
+
+        content_text = _content_to_text(message_content).strip()
+        image_urls = self._extract_image_urls_from_text(content_text)
+        if not image_urls:
+            raise LLMProviderError("Image chat fallback did not return any downloadable image URLs.")
+
+        payload_bytes, media_type = self._download_image(image_urls[0])
+        return {
+            "image": GeneratedImagePayload(payload_bytes=payload_bytes, media_type=media_type),
+            "usage": payload.get("usage", {}),
         }
 
     def _extract_images(self, payload: dict[str, Any], *, expected_count: int) -> list[GeneratedImagePayload]:
@@ -587,6 +699,31 @@ class OpenAICompatibleImageClient:
             return False
         normalized = error_message.lower()
         return "allowed values of enum: [1]" in normalized or ("enum: [1]" in normalized and "validation error" in normalized)
+
+    @staticmethod
+    def _should_try_chat_completions_image_fallback(error_message: str) -> bool:
+        normalized = error_message.lower()
+        return (
+            "404 page not found" in normalized
+            or "invalid url" in normalized
+            or "does not support /images/generations" in normalized
+            or "non-json response: 404" in normalized
+        )
+
+    @staticmethod
+    def _extract_image_urls_from_text(text: str) -> list[str]:
+        patterns = [
+            r"!\[[^\]]*\]\((https?://[^)\s]+)\)",
+            r"\[[^\]]+\]\((https?://[^)\s]+)\)",
+            r"(https?://[^\s)]+)",
+        ]
+        urls: list[str] = []
+        for pattern in patterns:
+            for match in re.findall(pattern, text):
+                candidate = str(match).strip().rstrip(".,")
+                if candidate and candidate not in urls:
+                    urls.append(candidate)
+        return urls
 
     @staticmethod
     def _decode_base64_image(raw_value: str) -> bytes:
@@ -658,6 +795,7 @@ class ReviewerDraftOutput(BaseModel):
     severity: Literal["minor", "moderate", "major", "critical"] = "minor"
     decision_reason: str = ""
     suggested_guidance: str = ""
+    apply_mode: Literal["apply_revisions", "preserve_writer"] = "apply_revisions"
     revised_narrative_blocks: list[str] = Field(default_factory=list)
 
 
@@ -717,6 +855,7 @@ class StoryAgentPipeline:
         *,
         client: OpenAICompatibleTextClient | None,
         image_client: OpenAICompatibleImageClient | None,
+        prompt_registry: LangfusePromptRegistry | None = None,
         default_model: str,
         planner_model: str | None = None,
         writer_model: str | None = None,
@@ -727,6 +866,7 @@ class StoryAgentPipeline:
     ):
         self.client = client
         self.image_client = image_client
+        self.prompt_registry = prompt_registry
         self.default_model = default_model
         self.planner_model = planner_model or default_model
         self.writer_model = writer_model or default_model
@@ -739,6 +879,7 @@ class StoryAgentPipeline:
     def from_settings(cls, settings) -> "StoryAgentPipeline":
         client = None
         image_client = None
+        prompt_registry = None
         if settings.openai_base_url and settings.openai_api_key:
             client = OpenAICompatibleTextClient(
                 base_url=settings.openai_base_url,
@@ -752,9 +893,18 @@ class StoryAgentPipeline:
                 timeout_seconds=settings.story_agent_timeout_seconds,
                 default_model=settings.story_agent_image_model or "gpt-image-1",
             )
+        if settings.langfuse_base_url and settings.langfuse_public_key and settings.langfuse_secret_key:
+            prompt_registry = LangfusePromptRegistry(
+                base_url=settings.langfuse_base_url,
+                public_key=settings.langfuse_public_key,
+                secret_key=settings.langfuse_secret_key,
+                prompt_label=settings.langfuse_prompt_label,
+                cache_ttl_seconds=settings.langfuse_prompt_cache_ttl_seconds,
+            )
         return cls(
             client=client,
             image_client=image_client,
+            prompt_registry=prompt_registry,
             default_model=settings.openai_model,
             planner_model=settings.story_agent_planner_model,
             writer_model=settings.story_agent_writer_model,
@@ -790,6 +940,55 @@ class StoryAgentPipeline:
         result.trace["output_summary"] = result.output_summary
         return result
 
+    def _resolve_prompt_messages(
+        self,
+        *,
+        prompt_name: str,
+        variables: dict[str, Any],
+        fallback_messages: list[dict[str, str]],
+    ) -> PromptResolution:
+        if not self.prompt_registry:
+            return PromptResolution(
+                name=prompt_name,
+                messages=fallback_messages,
+                source="fallback",
+            )
+        try:
+            return self.prompt_registry.resolve_messages(
+                prompt_name,
+                variables=variables,
+                fallback_messages=fallback_messages,
+            )
+        except Exception as exc:
+            return PromptResolution(
+                name=prompt_name,
+                messages=fallback_messages,
+                source="fallback",
+                error_message=str(exc),
+            )
+
+    @staticmethod
+    def _attach_prompt_resolution(result: StructuredAgentResponse, prompt_resolution: PromptResolution) -> None:
+        prompt_name = getattr(prompt_resolution, "name", None)
+        prompt_source = getattr(prompt_resolution, "source", None)
+        prompt_version = getattr(prompt_resolution, "version", None)
+        prompt_label = getattr(prompt_resolution, "label", None)
+        prompt_config = getattr(prompt_resolution, "config", None)
+        prompt_error = getattr(prompt_resolution, "error_message", None)
+
+        if prompt_name:
+            result.trace["prompt_name"] = prompt_name
+        if prompt_source:
+            result.trace["prompt_source"] = prompt_source
+        if prompt_version is not None:
+            result.trace["prompt_version"] = prompt_version
+        if prompt_label:
+            result.trace["prompt_label"] = prompt_label
+        if prompt_config:
+            result.trace["prompt_config"] = prompt_config
+        if prompt_error:
+            result.trace["prompt_registry_error"] = prompt_error
+
     def smoke_completion(self) -> StructuredAgentResponse:
         return self._complete_json(
             agent_name="smoke",
@@ -820,11 +1019,15 @@ class StoryAgentPipeline:
             "project": self._project_context(project),
             "character": self._character_context(character),
         }
-        result = self._complete_json(
-            agent_name="visual-profile",
-            model=self.visual_model,
-            response_model=CharacterVisualProfileOutput,
-            messages=[
+        prompt_variables = {
+            "project_title": project.title,
+            "character_name": character.name,
+            "context_json": json.dumps(context, ensure_ascii=False, indent=2),
+        }
+        prompt_resolution = self._resolve_prompt_messages(
+            prompt_name="visual_profile",
+            variables=prompt_variables,
+            fallback_messages=[
                 {
                     "role": "system",
                     "content": (
@@ -838,14 +1041,21 @@ class StoryAgentPipeline:
                     "content": (
                         "请基于以下项目与角色上下文，输出角色视觉档案。"
                         "要兼顾外貌、职业、气质、口吻与目标感，适合后续跨章节写作和剧照生成。\n"
-                        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+                        f"{prompt_variables['context_json']}"
                     ),
                 },
             ],
+        )
+        result = self._complete_json(
+            agent_name="visual-profile",
+            model=self.visual_model,
+            response_model=CharacterVisualProfileOutput,
+            messages=prompt_resolution.messages,
             temperature=0.45,
             max_tokens=1200,
             on_stream=on_stream,
         )
+        self._attach_prompt_resolution(result, prompt_resolution)
         return self._attach_trace_hints(
             result,
             input_summary=f"Build a visual profile for character {character.name} in project {project.title}.",
@@ -871,11 +1081,16 @@ class StoryAgentPipeline:
             if anchor_chapter
             else None,
         }
-        result = self._complete_json(
-            agent_name="planner",
-            model=self.planner_model,
-            response_model=PlannerOutput,
-            messages=[
+        prompt_variables = {
+            "project_title": project.title,
+            "chapter_count": chapter_count,
+            "extra_guidance": extra_guidance,
+            "context_json": json.dumps(context, ensure_ascii=False, indent=2),
+        }
+        prompt_resolution = self._resolve_prompt_messages(
+            prompt_name="planner",
+            variables=prompt_variables,
+            fallback_messages=[
                 {
                     "role": "system",
                     "content": (
@@ -892,14 +1107,21 @@ class StoryAgentPipeline:
                         "请基于以下上下文，生成 story_bible_updates 和 chapters。"
                         "chapter_count 必须与请求一致；章节标题、summary、chapter_goal、hook 都要彼此区分，"
                         "并直接服务于人物关系、冲突升级和悬念牵引。\n"
-                        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+                        f"{prompt_variables['context_json']}"
                     ),
                 },
             ],
+        )
+        result = self._complete_json(
+            agent_name="planner",
+            model=self.planner_model,
+            response_model=PlannerOutput,
+            messages=prompt_resolution.messages,
             temperature=0.7,
             max_tokens=2600,
             on_stream=on_stream,
         )
+        self._attach_prompt_resolution(result, prompt_resolution)
         chapter_titles = [item["title"] for item in result.payload.get("chapters", [])[:3]]
         return self._attach_trace_hints(
             result,
@@ -917,26 +1139,40 @@ class StoryAgentPipeline:
         extra_guidance: str = "",
         on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> StructuredAgentResponse:
+        quality_constraints = self._draft_quality_constraints(project, chapter, previous_chapters)
         context = {
             "project": self._project_context(project),
             "current_chapter": self._chapter_context(chapter, include_blocks=False, include_scenes=False),
             "previous_chapters": [
                 self._chapter_context(item, include_blocks=False, include_scenes=False) for item in previous_chapters
             ],
+            "recent_causal_chain": self._recent_causal_chain(previous_chapters),
             "characters": [self._character_context(character) for character in project.characters],
+            "style_memory": self._style_memory(chapter, previous_chapters),
+            "quality_constraints": quality_constraints,
             "extra_guidance": extra_guidance,
         }
-        result = self._complete_json(
-            agent_name="writer",
-            model=self.writer_model,
-            response_model=WriterDraftOutput,
-            messages=[
+        prompt_variables = {
+            "project_title": project.title,
+            "chapter_title": chapter.title,
+            "chapter_order": chapter.order_index,
+            "extra_guidance": extra_guidance,
+            "context_json": json.dumps(context, ensure_ascii=False, indent=2),
+            "quality_constraints_json": json.dumps(quality_constraints, ensure_ascii=False, indent=2),
+        }
+        prompt_resolution = self._resolve_prompt_messages(
+            prompt_name="writer_draft",
+            variables=prompt_variables,
+            fallback_messages=[
                 {
                     "role": "system",
                     "content": (
                         "你是 StoryCraft Studio 的 Writer Agent。"
                         "请写出章节正文，风格偏短剧/网文式混合叙事。"
                         "正文必须以人物推动情节，保留镜头感，但不要写成死板的影视剧本格式。"
+                        "每段必须承担明确的戏剧功能，不能只是同一种抒情或氛围铺陈。"
+                        "你必须优先复用 style_memory 中已经被作者确认的叙事距离、句法节奏和人物压强。"
+                        "如果项目整体以中文叙事为主，不要无故把主要角色称呼写成英文或拼音。"
                         "返回 JSON 时先写 public_notes，用 3-5 条短句告诉作者你准备怎样推进人物、冲突和章节钩子。"
                     ),
                 },
@@ -946,14 +1182,27 @@ class StoryAgentPipeline:
                         "请根据以下上下文写出本章 narrative_blocks。"
                         "每一段都要可直接展示给用户，避免摘要式空话；"
                         "要延续项目 tone、人物口吻和前序因果。\n"
-                        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+                        "你必须遵守以下写作约束：\n"
+                        "- 每段必须承担明确的戏剧功能，例如开场画面、信息揭示、关系摩擦、动作决断、钩子收束。\n"
+                        "- 至少一段通过具体动作推进，而不是只总结人物感受。\n"
+                        "- 至少一段通过对白、潜台词或即时反应暴露人物关系变化。\n"
+                        "- 避免以下套话：心头一紧、往事如潮水、未来的阴影、空气仿佛凝固、走向未知的深渊、某种说不清的感觉。\n"
+                        "- 优先复用 style_memory 中的作者确认样本，不要把文风写成统一模板腔。\n"
+                        f"{prompt_variables['context_json']}"
                     ),
                 },
             ],
+        )
+        result = self._complete_json(
+            agent_name="writer",
+            model=self.writer_model,
+            response_model=WriterDraftOutput,
+            messages=prompt_resolution.messages,
             temperature=0.82,
             max_tokens=2600,
             on_stream=on_stream,
         )
+        self._attach_prompt_resolution(result, prompt_resolution)
         return self._attach_trace_hints(
             result,
             input_summary=f"Write draft blocks for chapter {chapter.order_index}: {chapter.title}.",
@@ -969,25 +1218,37 @@ class StoryAgentPipeline:
         *,
         on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> StructuredAgentResponse:
+        quality_flags = self._detect_narrative_quality_flags(draft_payload.get("narrative_blocks", []))
         context = {
             "project": self._project_context(project),
             "chapter": self._chapter_context(chapter, include_blocks=False, include_scenes=False),
             "characters": [self._character_context(character) for character in project.characters],
             "draft_payload": draft_payload,
+            "quality_flags": quality_flags,
         }
-        result = self._complete_json(
-            agent_name="reviewer",
-            model=self.reviewer_model,
-            response_model=ReviewerDraftOutput,
-            messages=[
+        prompt_variables = {
+            "project_title": project.title,
+            "chapter_title": chapter.title,
+            "chapter_order": chapter.order_index,
+            "context_json": json.dumps(context, ensure_ascii=False, indent=2),
+            "quality_flags_json": json.dumps(quality_flags, ensure_ascii=False, indent=2),
+        }
+        prompt_resolution = self._resolve_prompt_messages(
+            prompt_name="reviewer_draft",
+            variables=prompt_variables,
+            fallback_messages=[
                 {
                     "role": "system",
                     "content": (
                         "你是 StoryCraft Studio 的 Reviewer Agent。"
                         "请检查人物口吻、称呼、动机、时间线、节奏与章节目标是否统一。"
                         "你需要先识别问题，再给出一版可以直接回填的修订稿。"
+                        "优先做最小必要改动。保留 Writer 原有的句法节奏、措辞锋利度和段落功能。"
+                        "不要为了看起来更顺而整段改写；如果正文已经成立，应尽量保留原文，只做局部修补。"
                         "绝大多数 minor / moderate 问题都应该直接在 revised_narrative_blocks 中修好，并把 decision 设为 accept。"
                         "只有在 revised_narrative_blocks 无法安全修复结构性问题时，才允许使用 rewrite_writer 或 fallback_planner。"
+                        "如果只需要提醒作者但不需要实质性改写，请把 apply_mode 设为 preserve_writer。"
+                        "但当 quality_flags 非空时不要使用 preserve_writer，必须优先消除这些套话、抽象总结或命名漂移。"
                         "返回 JSON 时先写 public_notes，用 2-4 条短句告诉作者你主要在检查什么。"
                     ),
                 },
@@ -995,16 +1256,25 @@ class StoryAgentPipeline:
                     "role": "user",
                     "content": (
                         "请审校以下章节初稿，并返回 issues、continuity_notes、revised_narrative_blocks。"
-                        "如果初稿整体可用，也仍要做轻度润色，让文本更连贯。"
+                        "如果初稿整体可用，请优先保留 Writer 原稿，只做最小必要改动。"
+                        "如果无需实质性改写，apply_mode 应为 preserve_writer，并在 continuity_notes 中说明保留原因。"
+                        "如果 quality_flags 非空时不要使用 preserve_writer，而要在 revised_narrative_blocks 中实际修掉它们。"
                         "请补充 severity，取值只能是 minor/moderate/major/critical。\n"
-                        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+                        f"{prompt_variables['context_json']}"
                     ),
                 },
             ],
+        )
+        result = self._complete_json(
+            agent_name="reviewer",
+            model=self.reviewer_model,
+            response_model=ReviewerDraftOutput,
+            messages=prompt_resolution.messages,
             temperature=0.2,
             max_tokens=2400,
             on_stream=on_stream,
         )
+        self._attach_prompt_resolution(result, prompt_resolution)
         decision = result.payload.get("decision", "accept")
         return self._attach_trace_hints(
             result,
@@ -1031,11 +1301,17 @@ class StoryAgentPipeline:
             "characters": [self._character_context(character) for character in project.characters],
             "extra_guidance": extra_guidance,
         }
-        result = self._complete_json(
-            agent_name="writer",
-            model=self.writer_model,
-            response_model=WriterScenesOutput,
-            messages=[
+        prompt_variables = {
+            "project_title": project.title,
+            "chapter_title": chapter.title,
+            "chapter_order": chapter.order_index,
+            "extra_guidance": extra_guidance,
+            "context_json": json.dumps(context, ensure_ascii=False, indent=2),
+        }
+        prompt_resolution = self._resolve_prompt_messages(
+            prompt_name="writer_scenes",
+            variables=prompt_variables,
+            fallback_messages=[
                 {
                     "role": "system",
                     "content": (
@@ -1051,14 +1327,21 @@ class StoryAgentPipeline:
                         "请根据以下上下文，生成 scenes。"
                         "每个 scene 都必须有明确地点、时间、目标、情绪和对白。"
                         "场景数量至少 1 个，但由剧情需要决定，不得机械固定。\n"
-                        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+                        f"{prompt_variables['context_json']}"
                     ),
                 },
             ],
+        )
+        result = self._complete_json(
+            agent_name="writer",
+            model=self.writer_model,
+            response_model=WriterScenesOutput,
+            messages=prompt_resolution.messages,
             temperature=0.78,
             max_tokens=2800,
             on_stream=on_stream,
         )
+        self._attach_prompt_resolution(result, prompt_resolution)
         return self._attach_trace_hints(
             result,
             input_summary=f"Structure scenes for chapter {chapter.order_index}: {chapter.title}.",
@@ -1080,11 +1363,16 @@ class StoryAgentPipeline:
             "characters": [self._character_context(character) for character in project.characters],
             "scenes_payload": scenes_payload,
         }
-        result = self._complete_json(
-            agent_name="reviewer",
-            model=self.reviewer_model,
-            response_model=ReviewerScenesOutput,
-            messages=[
+        prompt_variables = {
+            "project_title": project.title,
+            "chapter_title": chapter.title,
+            "chapter_order": chapter.order_index,
+            "context_json": json.dumps(context, ensure_ascii=False, indent=2),
+        }
+        prompt_resolution = self._resolve_prompt_messages(
+            prompt_name="reviewer_scenes",
+            variables=prompt_variables,
+            fallback_messages=[
                 {
                     "role": "system",
                     "content": (
@@ -1102,14 +1390,21 @@ class StoryAgentPipeline:
                         "请审校以下 scenes，并返回 issues、continuity_notes、revised_scenes。"
                         "如果结构已经成立，也要进行轻度修订，让场景推进更清晰。"
                         "请补充 severity，取值只能是 minor/moderate/major/critical。\n"
-                        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+                        f"{prompt_variables['context_json']}"
                     ),
                 },
             ],
+        )
+        result = self._complete_json(
+            agent_name="reviewer",
+            model=self.reviewer_model,
+            response_model=ReviewerScenesOutput,
+            messages=prompt_resolution.messages,
             temperature=0.2,
             max_tokens=2800,
             on_stream=on_stream,
         )
+        self._attach_prompt_resolution(result, prompt_resolution)
         decision = result.payload.get("decision", "accept")
         return self._attach_trace_hints(
             result,
@@ -1133,11 +1428,16 @@ class StoryAgentPipeline:
             "characters": [self._character_context(character) for character in characters],
             "extra_guidance": extra_guidance,
         }
-        result = self._complete_json(
-            agent_name="visual_prompt",
-            model=self.visual_model,
-            response_model=VisualPromptOutput,
-            messages=[
+        prompt_variables = {
+            "project_title": project.title,
+            "scene_title": scene.title,
+            "extra_guidance": extra_guidance,
+            "context_json": json.dumps(context, ensure_ascii=False, indent=2),
+        }
+        prompt_resolution = self._resolve_prompt_messages(
+            prompt_name="visual_prompt",
+            variables=prompt_variables,
+            fallback_messages=[
                 {
                     "role": "system",
                     "content": (
@@ -1155,14 +1455,21 @@ class StoryAgentPipeline:
                         "如果 scene 中已经有 canonical_scene_illustration，必须把它当成上一轮已批准的参考镜头，"
                         "延续角色脸部识别度、服装逻辑、灯光方向与整体气压。"
                         "如果 extra_guidance 非空，也要把它吸收进最终 prompt，而不是忽略。\n"
-                        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+                        f"{prompt_variables['context_json']}"
                     ),
                 },
             ],
+        )
+        result = self._complete_json(
+            agent_name="visual_prompt",
+            model=self.visual_model,
+            response_model=VisualPromptOutput,
+            messages=prompt_resolution.messages,
             temperature=0.45,
             max_tokens=1200,
             on_stream=on_stream,
         )
+        self._attach_prompt_resolution(result, prompt_resolution)
         return self._attach_trace_hints(
             result,
             input_summary=f"Build a visual prompt for scene {scene.title}.",
@@ -1266,12 +1573,15 @@ class StoryAgentPipeline:
             "genre": project.genre,
             "tone": project.tone,
             "era": project.era,
+            "target_chapter_count": project.target_chapter_count,
             "target_length": project.target_length,
             "logline": project.logline,
             "story_bible": {
                 "world_notes": project.story_bible.world_notes if project.story_bible else "",
                 "style_notes": project.story_bible.style_notes if project.story_bible else "",
                 "writing_rules": project.story_bible.writing_rules if project.story_bible else [],
+                "addressing_rules": project.story_bible.addressing_rules if project.story_bible else "",
+                "timeline_rules": project.story_bible.timeline_rules if project.story_bible else "",
             },
         }
 
@@ -1324,6 +1634,126 @@ class StoryAgentPipeline:
         if include_scenes:
             payload["scenes"] = [StoryAgentPipeline._scene_context(scene) for scene in sorted(chapter.scenes, key=lambda item: item.order_index)]
         return payload
+
+    @staticmethod
+    def _recent_causal_chain(previous_chapters: list[Chapter]) -> list[dict[str, Any]]:
+        if not previous_chapters:
+            return []
+        recent_items = []
+        for item in previous_chapters[-3:]:
+            recent_items.append(
+                {
+                    "order_index": item.order_index,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "hook": item.hook,
+                    "continuity_notes": list(item.continuity_notes or [])[:2],
+                }
+            )
+        return recent_items
+
+    @staticmethod
+    def _style_memory(chapter: Chapter, previous_chapters: list[Chapter]) -> dict[str, Any]:
+        protected_examples: list[dict[str, Any]] = []
+        recent_examples: list[dict[str, Any]] = []
+        candidate_chapters = [chapter, *reversed(previous_chapters)]
+        for item in candidate_chapters:
+            for block in sorted(item.narrative_blocks, key=lambda narrative_block: narrative_block.order_index):
+                excerpt = " ".join(str(block.content or "").split())
+                if not excerpt:
+                    continue
+                sample = {
+                    "chapter_order": item.order_index,
+                    "block_order": block.order_index,
+                    "excerpt": excerpt,
+                    "is_locked": bool(block.is_locked),
+                    "is_user_edited": bool(block.is_user_edited),
+                }
+                if block.is_locked or block.is_user_edited:
+                    protected_examples.append(sample)
+                else:
+                    recent_examples.append(sample)
+        return {
+            "author_confirmed_examples": protected_examples[:4],
+            "recent_reference_examples": recent_examples[:3],
+        }
+
+    @staticmethod
+    def _draft_quality_constraints(
+        project: Project,
+        chapter: Chapter,
+        previous_chapters: list[Chapter],
+    ) -> dict[str, Any]:
+        source_text = " ".join(
+            filter(
+                None,
+                [
+                    project.title,
+                    project.genre,
+                    project.tone,
+                    project.logline,
+                    chapter.title,
+                    chapter.summary,
+                    chapter.chapter_goal,
+                    chapter.hook,
+                    *(character.name for character in project.characters),
+                ],
+            )
+        )
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", source_text))
+        latin_count = len(re.findall(r"[A-Za-z]", source_text))
+        language_guidance = (
+            "当前项目以中文叙事为主，除非用户明确要求外文，不要无故把主要角色称呼写成英文或拼音。"
+            if cjk_count >= latin_count
+            else "保持人物称呼与用户输入一致，不要无故切换命名体系。"
+        )
+        return {
+            "chapter_function_focus": [
+                f"开场先把{chapter.summary}落成可见画面，而不是抽象解释。",
+                f"中段必须围绕“{chapter.chapter_goal}”制造关系摩擦或行动代价。",
+                f"结尾钩子必须服务“{chapter.hook}”，并让角色处在被迫回应的位置。",
+            ],
+            "required_moves": [
+                "至少一段通过具体动作推进。",
+                "至少一段通过对白、潜台词或即时反应暴露人物关系。",
+                "至少一段明确交付新信息、误导纠正或决策代价。",
+                "段长和句长要有变化，避免每段都用同一种节奏。",
+            ],
+            "anti_cliche_rules": [
+                "避免以下套话：心头一紧、往事如潮水、未来的阴影、空气仿佛凝固、走向未知的深渊、某种说不清的感觉。",
+                "不要反复使用'他知道这一切将改变一切'之类自我解释句。",
+                "不要把人物情绪直接总结成抽象名词，优先写动作、停顿、视线和反应。",
+            ],
+            "language_guidance": language_guidance,
+            "previous_chapter_count": len(previous_chapters),
+        }
+
+    @staticmethod
+    def _detect_narrative_quality_flags(blocks: list[str]) -> list[dict[str, Any]]:
+        flagged_phrases = [
+            "心中一紧",
+            "往事如潮水",
+            "未来的阴影",
+            "空气仿佛凝固",
+            "走向未知的深渊",
+            "某种说不清的感觉",
+            "无形的力量",
+        ]
+        flags: list[dict[str, Any]] = []
+        for index, block in enumerate(blocks, start=1):
+            text = str(block or "")
+            matches = [phrase for phrase in flagged_phrases if phrase in text]
+            if not matches:
+                continue
+            flags.append(
+                {
+                    "block_index": index,
+                    "type": "cliche_phrase",
+                    "matches": matches,
+                    "excerpt": text[:180],
+                }
+            )
+        return flags
 
     @staticmethod
     def _scene_context(scene: Scene) -> dict[str, Any]:

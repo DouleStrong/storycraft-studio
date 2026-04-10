@@ -55,6 +55,38 @@ def test_load_settings_reads_values_from_env_file(tmp_path, monkeypatch):
     assert settings.export_dir == (tmp_path / "custom-exports").resolve()
 
 
+def test_load_settings_reads_langfuse_prompt_values_from_env_file(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "LANGFUSE_BASE_URL=http://localhost:3000",
+                "LANGFUSE_PUBLIC_KEY=pk-test",
+                "LANGFUSE_SECRET_KEY=sk-test",
+                "LANGFUSE_PROMPT_LABEL=staging",
+                "LANGFUSE_PROMPT_CACHE_TTL_SECONDS=180",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("STORY_PLATFORM_ENV_FILE", str(env_file))
+    monkeypatch.delenv("STORY_PLATFORM_SKIP_DOTENV", raising=False)
+    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_PROMPT_LABEL", raising=False)
+    monkeypatch.delenv("LANGFUSE_PROMPT_CACHE_TTL_SECONDS", raising=False)
+
+    settings = load_settings()
+
+    assert settings.langfuse_base_url == "http://localhost:3000"
+    assert settings.langfuse_public_key == "pk-test"
+    assert settings.langfuse_secret_key == "sk-test"
+    assert settings.langfuse_prompt_label == "staging"
+    assert settings.langfuse_prompt_cache_ttl_seconds == 180
+
+
 def test_load_settings_can_override_ambient_env_when_env_file_requests_it(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(

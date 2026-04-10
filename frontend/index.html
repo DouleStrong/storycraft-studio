@@ -136,11 +136,22 @@
                   <p class="eyebrow">章节导航</p>
                   <h3>切换章节</h3>
                 </div>
-                <div class="inline-actions">
-                  <button id="createSnapshotButton" class="ghost-button">创建快照</button>
-                  <button id="duplicateProjectButton" class="ghost-button">复制项目</button>
-                  <button id="generateOutlineButton" class="primary-button">生成章节大纲</button>
-                  <button id="exportBundleButton" class="ghost-button">导出成品</button>
+                <div class="hero-action-groups">
+                  <div class="hero-action-cluster">
+                    <span class="hero-action-label">创作动作</span>
+                    <div class="inline-actions hero-action-strip">
+                      <button id="generateOutlineButton" class="primary-button">生成章节大纲</button>
+                      <button id="exportBundleButton" class="ghost-button">导出成品</button>
+                    </div>
+                  </div>
+                  <div class="hero-action-cluster is-project">
+                    <span class="hero-action-label">项目动作</span>
+                    <div class="inline-actions hero-action-strip">
+                      <button id="createSnapshotButton" class="ghost-button">创建快照</button>
+                      <button id="duplicateProjectButton" class="ghost-button">复制项目</button>
+                      <button id="deleteProjectButton" class="ghost-button danger-button">删除作品</button>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div id="chapterTabs" class="chapter-tabs chapter-tabs-hero"></div>
@@ -154,6 +165,9 @@
                   <div>
                     <p class="eyebrow">Story Bible</p>
                     <h3>设定中枢</h3>
+                  </div>
+                  <div class="inline-actions">
+                    <button id="openStoryBibleButton" class="ghost-button" type="button" data-open-story-bible-modal>设定详情</button>
                   </div>
                 </div>
                 <div id="storyBiblePanel" class="story-bible-shell"></div>
@@ -190,9 +204,10 @@
                 <div class="subpanel-header">
                   <div>
                     <p class="eyebrow">Agent 面板</p>
-                    <h3>任务、轨迹与导出</h3>
+                    <h3>协作焦点与轨迹</h3>
                   </div>
                 </div>
+                <div id="agentFocus" class="agent-focus-shell"></div>
                 <div id="jobList" class="job-list"></div>
                 <div id="jobTrace" class="trace-panel"></div>
                 <div id="exportList" class="job-list exports"></div>
@@ -244,6 +259,20 @@
           <p id="characterLibraryHint" class="panel-note"></p>
           <div id="characterLibraryList" class="entity-list modal-library-list"></div>
         </section>
+      </section>
+    </div>
+
+    <div id="storyBibleModal" class="modal-shell hidden">
+      <div class="modal-backdrop" data-close-story-bible-modal></div>
+      <section class="modal-card story-bible-modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Story Bible</p>
+            <h3>设定详情</h3>
+          </div>
+          <button id="closeStoryBibleModalButton" class="ghost-button" type="button" data-close-story-bible-modal>关闭</button>
+        </div>
+        <div id="storyBibleDetail" class="story-bible-modal-content"></div>
       </section>
     </div>
 

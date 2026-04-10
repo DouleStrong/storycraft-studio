@@ -54,6 +54,47 @@ function resolveFocusJob(jobs, selectedJobDetail) {
     || null;
 }
 
+function resolveTone(job) {
+  if (job?.status === "awaiting_user") {
+    return "warn";
+  }
+  if (job?.status === "failed") {
+    return "danger";
+  }
+  if (job?.status === "completed") {
+    return "success";
+  }
+  return "live";
+}
+
+function buildHistory(jobs, project, selectedJobDetail, focusJob) {
+  const selectedJobId = Number(selectedJobDetail?.id || focusJob?.id || 0);
+
+  return jobs.slice(0, 8).map((job) => {
+    const workflowProgress = resolveWorkflowProgress(job);
+    const jobFeedback = describeJobFeedback(job);
+    const chapter = findChapter(project, job.chapter_id);
+    return {
+      jobId: Number(job.id || 0),
+      chapterId: Number(chapter?.id || 0) || null,
+      title: formatJobType(job.job_type),
+      status: String(job.status || ""),
+      statusLabel: formatJobStatus(job.status),
+      chapterLabel: formatChapterLabel(chapter),
+      summary:
+        workflowProgress.latestAgentSummary
+        || job.status_message
+        || jobFeedback.message
+        || "这条任务还没有写入更多公开协作摘要。",
+      currentStepLabel: workflowProgress.currentStepLabel || "",
+      progressLabel: `${Number(job.progress || 0)}%`,
+      tone: resolveTone(job),
+      isSelected: Number(job.id || 0) === selectedJobId,
+      isFocus: Number(job.id || 0) === Number(focusJob?.id || 0),
+    };
+  });
+}
+
 export function buildAgentWorkbench(project, options = {}) {
   const jobs = normalizeJobs(project);
   const selectedJobDetail = options.selectedJobDetail || null;
@@ -75,6 +116,7 @@ export function buildAgentWorkbench(project, options = {}) {
     const jobFeedback = describeJobFeedback(focusJob);
     return {
       summary,
+      history: buildHistory(jobs, project, selectedJobDetail, focusJob),
       focus: {
         kind: "job",
         jobId: Number(focusJob.id || 0),
@@ -95,14 +137,7 @@ export function buildAgentWorkbench(project, options = {}) {
         progressLabel: `${Number(focusJob.progress || 0)}%`,
         currentStepLabel: workflowProgress.currentStepLabel || "",
         latestAgentSummary: workflowProgress.latestAgentSummary || "",
-        tone:
-          focusJob.status === "awaiting_user"
-            ? "warn"
-            : focusJob.status === "failed"
-              ? "danger"
-              : focusJob.status === "completed"
-                ? "success"
-                : "live",
+        tone: resolveTone(focusJob),
       },
     };
   }
@@ -110,6 +145,7 @@ export function buildAgentWorkbench(project, options = {}) {
   if (pendingIntervention && activeChapter) {
     return {
       summary,
+      history: [],
       focus: {
         kind: "intervention",
         jobId: null,
@@ -132,6 +168,7 @@ export function buildAgentWorkbench(project, options = {}) {
   if (activeChapter) {
     return {
       summary,
+      history: [],
       focus: {
         kind: "chapter_idle",
         jobId: null,
@@ -153,6 +190,7 @@ export function buildAgentWorkbench(project, options = {}) {
 
   return {
     summary,
+    history: [],
     focus: {
       kind: "empty",
       jobId: null,

@@ -63,6 +63,9 @@ test("buildAgentWorkbench prioritizes the selected job as the current collaborat
   assert.equal(result.focus.currentStepLabel, "Writer 生成正文");
   assert.equal(result.focus.summary, "正在把雨夜重逢写成更克制的第一人称叙述。");
   assert.equal(result.summary.activeJobs, 1);
+  assert.equal(result.history[0].jobId, 98);
+  assert.equal(result.history[0].isSelected, true);
+  assert.equal(result.history[0].currentStepLabel, "Writer 生成正文");
 });
 
 test("buildAgentWorkbench falls back to an awaiting-user job when no explicit selection exists", () => {
@@ -97,6 +100,9 @@ test("buildAgentWorkbench falls back to an awaiting-user job when no explicit se
   assert.equal(result.focus.summary, "Reviewer 建议先确认情绪推进，再决定是否重写本章。");
   assert.equal(result.summary.awaitingJobs, 1);
   assert.equal(result.summary.completedJobs, 1);
+  assert.equal(result.history[0].jobId, 102);
+  assert.equal(result.history[0].tone, "warn");
+  assert.equal(result.history[1].jobId, 101);
 });
 
 test("buildAgentWorkbench shows chapter-level intervention guidance when no jobs are running", () => {
@@ -127,4 +133,5 @@ test("buildAgentWorkbench shows chapter-level intervention guidance when no jobs
   assert.equal(result.focus.summary, "这一章的称呼和前文不一致，建议先统一再决定是否重写。");
   assert.equal(result.focus.detail, "保留克制语气，只调整称呼和时间线。");
   assert.equal(result.summary.totalJobs, 0);
+  assert.deepEqual(result.history, []);
 });

@@ -289,6 +289,69 @@ class ModerateAutoApplyStoryAgents(FakeStoryAgents):
         )
 
 
+class PreserveWriterVoiceAgents(FakeStoryAgents):
+    def write_chapter_draft(self, project, chapter, previous_chapters, extra_guidance="", on_stream=None):
+        return StructuredAgentResponse(
+            payload={
+                "narrative_blocks": [
+                    "[writer-voice] 她先把推子往下压了一格，才让那句到嘴边的解释重新咽回去。",
+                    "[writer-voice] 顾昼没有催她，只把照片推过来，像把旧账轻轻按在桌面上。",
+                ]
+            },
+            raw_text="{}",
+            trace={"agent": "writer", "model": "fake-writer", "attempts": 1},
+        )
+
+    def review_chapter_draft(self, project, chapter, draft_payload, on_stream=None):
+        return StructuredAgentResponse(
+            payload={
+                "issues": [],
+                "continuity_notes": ["Reviewer：这一章口吻成立，建议保留 Writer 原稿，只提醒后文继续压住解释欲。"],
+                "decision": "accept",
+                "severity": "minor",
+                "decision_reason": "Draft voice is already specific and should be preserved.",
+                "suggested_guidance": "Keep the same restraint in the next chapter.",
+                "apply_mode": "preserve_writer",
+                "revised_narrative_blocks": [f"[flattened] {item}" for item in draft_payload["narrative_blocks"]],
+            },
+            raw_text="{}",
+            trace={"agent": "reviewer", "model": "fake-reviewer", "attempts": 1},
+        )
+
+
+class QualityFlagAwareReviewAgents(FakeStoryAgents):
+    def write_chapter_draft(self, project, chapter, previous_chapters, extra_guidance="", on_stream=None):
+        return StructuredAgentResponse(
+            payload={
+                "narrative_blocks": [
+                    "来电亮起的一瞬间，她心中一紧，空气仿佛凝固，某种说不清的感觉一下子翻了上来。",
+                    "她没有动，只让那句解释卡在喉咙里，像把旧事重新含回口中。",
+                ]
+            },
+            raw_text="{}",
+            trace={"agent": "writer", "model": "fake-writer", "attempts": 1},
+        )
+
+    def review_chapter_draft(self, project, chapter, draft_payload, on_stream=None):
+        return StructuredAgentResponse(
+            payload={
+                "issues": ["出现高频套话，建议改成动作与反应。"],
+                "continuity_notes": ["Reviewer：已把高频套话改写成更具体的动作反应。"],
+                "decision": "accept",
+                "severity": "minor",
+                "decision_reason": "可在当前轮次修正。",
+                "suggested_guidance": "后续继续减少抽象氛围句。",
+                "apply_mode": "preserve_writer",
+                "revised_narrative_blocks": [
+                    "来电亮起时，她先把推子往下压了一格，指节停在滑轨上，没立刻接。",
+                    "她没有动，只让那句解释卡在喉咙里，像把旧事重新含回口中。",
+                ],
+            },
+            raw_text="{}",
+            trace={"agent": "reviewer", "model": "fake-reviewer", "attempts": 1},
+        )
+
+
 class CanonicalFeedbackAgents(FakeStoryAgents):
     def build_visual_prompt(self, project, scene, characters, extra_guidance="", on_stream=None):
         canonical = next((item for item in scene.illustrations if item.is_canonical), None)
@@ -343,7 +406,74 @@ class ProbeTaskQueue:
         return self.probe_result
 
 
-def create_client(tmp_path, monkeypatch, story_agents=None, task_queue=None):
+class FakeLangfuseObservation:
+    def __init__(self, *, trace_id, observation_id):
+        self.trace_id = trace_id
+        self.observation_id = observation_id
+        self.trace_url = f"http://langfuse.local/trace/{trace_id}"
+        self.updates = []
+        self.completions = []
+        self.failures = []
+
+    def update(self, **kwargs):
+        self.updates.append(kwargs)
+
+    def complete(self, **kwargs):
+        self.completions.append(kwargs)
+
+    def fail(self, **kwargs):
+        self.failures.append(kwargs)
+
+    def payload(self):
+        return {
+            "trace_id": self.trace_id,
+            "observation_id": self.observation_id,
+            "trace_url": self.trace_url,
+        }
+
+
+class FakeLangfuseWorkflowTrace:
+    def __init__(self, job_id):
+        self.trace_id = f"trace-{job_id}"
+        self.observation_id = f"workflow-{job_id}"
+        self.trace_url = f"http://langfuse.local/trace/trace-{job_id}"
+        self.agent_observations = []
+        self.completed = []
+        self.failed = []
+
+    def start_agent_observation(self, **kwargs):
+        observation = FakeLangfuseObservation(
+            trace_id=self.trace_id,
+            observation_id=f"{kwargs['step_key']}-{len(self.agent_observations) + 1}",
+        )
+        self.agent_observations.append({"kwargs": kwargs, "observation": observation})
+        return observation
+
+    def complete(self, **kwargs):
+        self.completed.append(kwargs)
+
+    def fail(self, **kwargs):
+        self.failed.append(kwargs)
+
+    def payload(self):
+        return {
+            "trace_id": self.trace_id,
+            "observation_id": self.observation_id,
+            "trace_url": self.trace_url,
+        }
+
+
+class FakeLangfuseTracer:
+    def __init__(self):
+        self.workflow_traces = []
+
+    def start_workflow_trace(self, *, job):
+        trace = FakeLangfuseWorkflowTrace(job.id)
+        self.workflow_traces.append(trace)
+        return trace
+
+
+def create_client(tmp_path, monkeypatch, story_agents=None, task_queue=None, langfuse_tracer=None):
     base_dir = tmp_path / "runtime"
     monkeypatch.setenv("STORY_PLATFORM_SKIP_DOTENV", "1")
     monkeypatch.setenv("STORY_PLATFORM_ALLOW_SQLITE", "1")
@@ -358,10 +488,15 @@ def create_client(tmp_path, monkeypatch, story_agents=None, task_queue=None):
     monkeypatch.delenv("STORY_AGENT_REVIEWER_MODEL", raising=False)
     monkeypatch.delenv("STORY_AGENT_VISUAL_MODEL", raising=False)
     monkeypatch.delenv("STORY_AGENT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_PROMPT_LABEL", raising=False)
+    monkeypatch.delenv("LANGFUSE_PROMPT_CACHE_TTL_SECONDS", raising=False)
 
     from app.main import create_app
 
-    return create_app(story_agents=story_agents, task_queue=task_queue)
+    return create_app(story_agents=story_agents, task_queue=task_queue, langfuse_tracer=langfuse_tracer)
 
 
 def auth_headers(token):
@@ -1559,6 +1694,124 @@ async def test_moderate_reviewer_decisions_are_auto_applied_without_manual_inter
 
 
 @pytest.mark.anyio
+async def test_reviewer_can_preserve_writer_voice_without_overwriting_blocks(tmp_path, monkeypatch):
+    app = create_client(tmp_path, monkeypatch, story_agents=PreserveWriterVoiceAgents())
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        auth = await register_user(client)
+        token = auth["token"]
+
+        project = (
+            await client.post(
+                "/api/projects",
+                headers=auth_headers(token),
+                json={
+                    "title": "失声时刻",
+                    "genre": "都市悬疑",
+                    "tone": "克制、贴身、关系压强强",
+                    "era": "当代",
+                    "target_chapter_count": 2,
+                    "target_length": "2章",
+                    "logline": "一通旧案来电把两位旧识重新推回同一间直播间。",
+                },
+            )
+        ).json()
+
+        outline_job = (
+            await client.post(
+                f"/api/projects/{project['id']}/generate/outline",
+                headers=auth_headers(token),
+                json={},
+            )
+        ).json()
+        outline_result = await wait_for_job(client, token, outline_job["id"])
+        assert outline_result["status"] == "completed", outline_result
+
+        project_detail = (
+            await client.get(f"/api/projects/{project['id']}", headers=auth_headers(token))
+        ).json()
+        chapter_id = project_detail["chapters"][0]["id"]
+
+        draft_job = (
+            await client.post(
+                f"/api/chapters/{chapter_id}/generate-draft",
+                headers=auth_headers(token),
+                json={},
+            )
+        ).json()
+        draft_result = await wait_for_terminal_job(client, token, draft_job["id"])
+        assert draft_result["status"] == "completed", draft_result
+        assert draft_result["result"]["apply_mode"] == "preserve_writer"
+
+        refreshed_project = (
+            await client.get(f"/api/projects/{project['id']}", headers=auth_headers(token))
+        ).json()
+        first_chapter = refreshed_project["chapters"][0]
+        assert first_chapter["narrative_blocks"][0]["content"].startswith("[writer-voice]")
+        assert not first_chapter["narrative_blocks"][0]["content"].startswith("[flattened]")
+        assert first_chapter["continuity_notes"] == ["Reviewer：这一章口吻成立，建议保留 Writer 原稿，只提醒后文继续压住解释欲。"]
+
+
+@pytest.mark.anyio
+async def test_quality_flags_override_preserve_writer_when_reviewer_fix_is_cleaner(tmp_path, monkeypatch):
+    app = create_client(tmp_path, monkeypatch, story_agents=QualityFlagAwareReviewAgents())
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        auth = await register_user(client)
+        token = auth["token"]
+
+        project = (
+            await client.post(
+                "/api/projects",
+                headers=auth_headers(token),
+                json={
+                    "title": "冷线重启",
+                    "genre": "都市悬疑",
+                    "tone": "克制、贴身、关系压强强",
+                    "era": "当代",
+                    "target_chapter_count": 2,
+                    "target_length": "2章",
+                    "logline": "失踪案的来电在直播间里重新响起。",
+                },
+            )
+        ).json()
+
+        outline_job = (
+            await client.post(
+                f"/api/projects/{project['id']}/generate/outline",
+                headers=auth_headers(token),
+                json={},
+            )
+        ).json()
+        outline_result = await wait_for_job(client, token, outline_job["id"])
+        assert outline_result["status"] == "completed", outline_result
+
+        project_detail = (
+            await client.get(f"/api/projects/{project['id']}", headers=auth_headers(token))
+        ).json()
+        chapter_id = project_detail["chapters"][0]["id"]
+
+        draft_job = (
+            await client.post(
+                f"/api/chapters/{chapter_id}/generate-draft",
+                headers=auth_headers(token),
+                json={},
+            )
+        ).json()
+        draft_result = await wait_for_terminal_job(client, token, draft_job["id"])
+        assert draft_result["status"] == "completed", draft_result
+
+        refreshed_project = (
+            await client.get(f"/api/projects/{project['id']}", headers=auth_headers(token))
+        ).json()
+        first_chapter = refreshed_project["chapters"][0]
+        assert "心中一紧" not in first_chapter["narrative_blocks"][0]["content"]
+        assert "空气仿佛凝固" not in first_chapter["narrative_blocks"][0]["content"]
+        assert first_chapter["narrative_blocks"][0]["content"].startswith("来电亮起时，她先把推子往下压了一格")
+        assert first_chapter["continuity_notes"] == ["Reviewer：已把高频套话改写成更具体的动作反应。"]
+
+
+@pytest.mark.anyio
 async def test_story_bible_patch_creates_revision_and_new_jobs_bind_latest_revision(tmp_path, monkeypatch):
     app = create_client(tmp_path, monkeypatch, story_agents=FakeStoryAgents())
     transport = httpx.ASGITransport(app=app)
@@ -2136,3 +2389,51 @@ async def test_project_access_is_limited_to_owner(tmp_path, monkeypatch):
             headers=auth_headers(stranger["token"]),
         )
         assert forbidden.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_outline_job_persists_langfuse_trace_metadata_for_agent_runs(tmp_path, monkeypatch):
+    fake_tracer = FakeLangfuseTracer()
+    app = create_client(tmp_path, monkeypatch, story_agents=FakeStoryAgents(), langfuse_tracer=fake_tracer)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        auth = await register_user(client)
+        token = auth["token"]
+
+        create_project = await client.post(
+            "/api/projects",
+            headers=auth_headers(token),
+            json={
+                "title": "站台尽头的回声",
+                "genre": "都市悬疑",
+                "tone": "克制、潮湿、人物驱动",
+                "era": "当代",
+                "target_chapter_count": 4,
+                "target_length": "4章短剧感",
+                "logline": "旧站台深夜反复播报尚未发生的事故。",
+            },
+        )
+        assert create_project.status_code == 201, create_project.text
+        project = create_project.json()
+
+        outline = await client.post(
+            f"/api/projects/{project['id']}/generate/outline",
+            headers=auth_headers(token),
+            json={},
+        )
+        assert outline.status_code == 202, outline.text
+        job_id = outline.json()["id"]
+
+        job_payload = await wait_for_job(client, token, job_id)
+        assert job_payload["status"] == "completed"
+        assert fake_tracer.workflow_traces
+        assert fake_tracer.workflow_traces[0].agent_observations
+        assert fake_tracer.workflow_traces[0].agent_observations[0]["kwargs"]["step_key"] == "planner"
+
+        job_detail = await client.get(f"/api/jobs/{job_id}", headers=auth_headers(token))
+        assert job_detail.status_code == 200, job_detail.text
+        detail_payload = job_detail.json()
+        assert detail_payload["result"]["langfuse"]["trace_id"] == f"trace-{job_id}"
+        assert detail_payload["result"]["langfuse"]["trace_url"] == f"http://langfuse.local/trace/trace-{job_id}"
+        assert detail_payload["agent_runs"][0]["usage_payload"]["langfuse"]["trace_id"] == f"trace-{job_id}"
+        assert detail_payload["agent_runs"][0]["usage_payload"]["langfuse"]["observation_id"] == "planner-1"

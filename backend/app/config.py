@@ -25,6 +25,11 @@ class Settings:
     story_agent_image_size: str
     story_agent_timeout_seconds: int
     story_review_intervention_min_severity: str
+    langfuse_base_url: str | None
+    langfuse_public_key: str | None
+    langfuse_secret_key: str | None
+    langfuse_prompt_label: str
+    langfuse_prompt_cache_ttl_seconds: int
 
 
 def review_intervention_min_severity(settings: object) -> str:
@@ -157,4 +162,9 @@ def load_settings() -> Settings:
             "STORY_REVIEW_INTERVENTION_MIN_SEVERITY",
             "critical",
         ).strip().lower(),
+        langfuse_base_url=os.getenv("LANGFUSE_BASE_URL"),
+        langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        langfuse_prompt_label=os.getenv("LANGFUSE_PROMPT_LABEL", "production").strip() or "production",
+        langfuse_prompt_cache_ttl_seconds=int(os.getenv("LANGFUSE_PROMPT_CACHE_TTL_SECONDS", "300")),
     )

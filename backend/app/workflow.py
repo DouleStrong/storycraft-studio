@@ -7,6 +7,7 @@ from typing import Callable
 
 from sqlalchemy.orm import Session, selectinload
 
+from .langfuse_tracing import NoopLangfuseWorkflowTrace
 from .models import (
     AgentRun,
     Chapter,
@@ -40,6 +41,10 @@ SEVERITY_RANK = {
 }
 
 
+def _compact_trace_metadata(**kwargs) -> dict:
+    return {key: value for key, value in kwargs.items() if value not in (None, "", [], {}, ())}
+
+
 @dataclass(slots=True)
 class WorkflowNode:
     key: str
@@ -59,11 +64,13 @@ class WorkflowExecution:
     job: GenerationJob
     asset_store: LocalAssetStore
     story_agents: StoryAgentPipeline
+    langfuse_trace: object | None = None
     state: dict = field(default_factory=dict)
     result_summary: dict = field(default_factory=dict)
     final_status: str = "completed"
     progress_points: dict[str, int] = field(default_factory=dict)
     _sequence: int = 0
+    _langfuse_observations: dict[int, object] = field(default_factory=dict)
 
     def set_progress(self, node_key: str) -> None:
         progress = self.progress_points.get(node_key)
@@ -78,6 +85,20 @@ class WorkflowExecution:
     def next_sequence(self) -> int:
         self._sequence += 1
         return self._sequence
+
+    @staticmethod
+    def _merge_usage_payload(
+        existing_payload: dict | None,
+        *,
+        provider_usage: dict | None = None,
+        langfuse_payload: dict | None = None,
+    ) -> dict:
+        payload = dict(existing_payload or {})
+        if provider_usage:
+            payload.update(provider_usage)
+        if langfuse_payload:
+            payload["langfuse"] = langfuse_payload
+        return payload
 
     def record_agent_run(
         self,
@@ -106,7 +127,11 @@ class WorkflowExecution:
             public_notes=response.payload.get("public_notes", []),
             issues=response.payload.get("issues", []),
             decision=response.payload.get("decision"),
-            usage_payload=response.trace.get("usage", {}),
+            usage_payload=self._merge_usage_payload(
+                None,
+                provider_usage=response.trace.get("usage", {}),
+                langfuse_payload=response.trace.get("langfuse"),
+            ),
             started_at=datetime.now(UTC),
             completed_at=datetime.now(UTC),
         )
@@ -148,6 +173,27 @@ class WorkflowExecution:
         )
         self.db.add(run)
         self.db.flush()
+        if self.langfuse_trace and not isinstance(self.langfuse_trace, NoopLangfuseWorkflowTrace):
+            langfuse_observation = getattr(self.langfuse_trace, "start_agent_observation", lambda **_: None)(
+                step_key=step_key,
+                agent_name=agent_name,
+                model_id=model_id,
+                input_summary=input_summary,
+                prompt_preview=prompt_preview,
+                metadata={
+                    "job_id": self.job.id,
+                    "project_id": self.job.project_id,
+                    "chapter_id": self.job.chapter_id,
+                    "scene_id": self.job.scene_id,
+                },
+            )
+            if langfuse_observation is not None:
+                self._langfuse_observations[run.id] = langfuse_observation
+                run.usage_payload = self._merge_usage_payload(
+                    run.usage_payload,
+                    langfuse_payload=getattr(langfuse_observation, "payload", lambda: {})(),
+                )
+                self.db.flush()
         return run
 
     def update_agent_run_stream(
@@ -170,6 +216,12 @@ class WorkflowExecution:
             self.job.status_message = status_message
         if progress is not None:
             self.job.progress = max(self.job.progress, min(progress, 95))
+        langfuse_observation = self._langfuse_observations.get(run.id)
+        if langfuse_observation is not None:
+            getattr(langfuse_observation, "update", lambda **_: None)(
+                output=stream_text or output_summary or status_message,
+                metadata=_compact_trace_metadata(progress=progress, public_notes=public_notes),
+            )
         self.db.flush()
 
     def complete_agent_run(
@@ -190,8 +242,29 @@ class WorkflowExecution:
         run.public_notes = response.payload.get("public_notes", run.public_notes)
         run.issues = response.payload.get("issues", [])
         run.decision = response.payload.get("decision")
-        run.usage_payload = response.trace.get("usage", {})
+        langfuse_observation = self._langfuse_observations.pop(run.id, None)
+        langfuse_payload = getattr(langfuse_observation, "payload", lambda: {})() if langfuse_observation else None
+        run.usage_payload = self._merge_usage_payload(
+            run.usage_payload,
+            provider_usage=response.trace.get("usage", {}),
+            langfuse_payload=langfuse_payload,
+        )
         run.completed_at = datetime.now(UTC)
+        if langfuse_observation is not None:
+            getattr(langfuse_observation, "complete", lambda **_: None)(
+                output=response.output_summary or response.trace.get("output_summary") or response.raw_text,
+                metadata={
+                    "status": status,
+                    "adoption_state": adoption_state,
+                    "public_notes": response.payload.get("public_notes", []),
+                    "issues": response.payload.get("issues", []),
+                    "decision": response.payload.get("decision"),
+                    "prompt_name": response.trace.get("prompt_name"),
+                    "prompt_source": response.trace.get("prompt_source"),
+                    "prompt_version": response.trace.get("prompt_version"),
+                    "prompt_label": response.trace.get("prompt_label"),
+                },
+            )
         self.db.flush()
         return run
 
@@ -200,6 +273,16 @@ class WorkflowExecution:
         run.adoption_state = "rejected"
         run.error_message = error_message
         run.completed_at = datetime.now(UTC)
+        langfuse_observation = self._langfuse_observations.pop(run.id, None)
+        if langfuse_observation is not None:
+            run.usage_payload = self._merge_usage_payload(
+                run.usage_payload,
+                langfuse_payload=getattr(langfuse_observation, "payload", lambda: {})(),
+            )
+            getattr(langfuse_observation, "fail", lambda **_: None)(
+                output=error_message,
+                metadata={"status": "failed", "error_message": error_message},
+            )
         self.db.flush()
         return run
 
@@ -233,11 +316,13 @@ class WorkflowRunner:
         asset_store: LocalAssetStore,
         story_agents: StoryAgentPipeline,
         *,
+        langfuse_tracer=None,
         review_intervention_min_severity: str = "critical",
     ):
         self.session_factory = session_factory
         self.asset_store = asset_store
         self.story_agents = story_agents
+        self.langfuse_tracer = langfuse_tracer
         self.review_intervention_min_severity = review_intervention_min_severity
         self.graphs = self._build_graphs()
 
@@ -261,6 +346,7 @@ class WorkflowRunner:
                 job=job,
                 asset_store=self.asset_store,
                 story_agents=self.story_agents,
+                langfuse_trace=self.langfuse_tracer.start_workflow_trace(job=job) if self.langfuse_tracer else None,
                 progress_points=self._progress_points_for(graph),
             )
 
@@ -285,13 +371,37 @@ class WorkflowRunner:
                     if execution.final_status == "awaiting_user"
                     else "本轮协作已完成。"
                 )
+                langfuse_payload = getattr(execution.langfuse_trace, "payload", lambda: {})()
+                if langfuse_payload:
+                    execution.result_summary["langfuse"] = langfuse_payload
                 job.result_payload = execution.result_summary
                 job.completed_at = datetime.now(UTC)
+                if execution.langfuse_trace is not None:
+                    getattr(execution.langfuse_trace, "complete", lambda **_: None)(
+                        output=execution.result_summary,
+                        metadata={
+                            "status": job.status,
+                            "job_type": job.job_type,
+                            "progress": job.progress,
+                        },
+                    )
             except Exception as exc:  # pragma: no cover - surfaced via API status
                 job.status = "failed"
                 job.error_message = str(exc)
                 job.status_message = f"任务失败：{exc}"
                 job.completed_at = datetime.now(UTC)
+                if execution.langfuse_trace is not None:
+                    getattr(execution.langfuse_trace, "fail", lambda **_: None)(
+                        output=str(exc),
+                        metadata={
+                            "status": "failed",
+                            "job_type": job.job_type,
+                            "error_message": str(exc),
+                        },
+                    )
+            finally:
+                if execution.langfuse_trace is not None:
+                    getattr(execution.langfuse_trace, "close", lambda: None)()
 
     def _build_graphs(self) -> dict[str, WorkflowGraph]:
         return {
@@ -879,7 +989,7 @@ class WorkflowRunner:
         reviewer_result: StructuredAgentResponse = execution.state["reviewer_result"]
         writer_run: AgentRun = execution.state["writer_run"]
         reviewer_run: AgentRun = execution.state["reviewer_run"]
-        revised_blocks = reviewer_result.payload.get("revised_narrative_blocks") or writer_result.payload.get("narrative_blocks") or []
+        revised_blocks = self._resolve_draft_blocks_to_persist(writer_result, reviewer_result)
         if not revised_blocks:
             raise ValueError("Reviewer did not return revised narrative blocks")
         changed_blocks = self._apply_narrative_blocks_with_protection(execution, chapter, revised_blocks)
@@ -908,6 +1018,7 @@ class WorkflowRunner:
             "review_notes": reviewer_result.payload.get("issues", []),
             "story_bible_revision_id": chapter.source_story_bible_revision_id,
             "content_revision_id": revision.id,
+            "apply_mode": reviewer_result.payload.get("apply_mode", "apply_revisions"),
             "model_ids": {
                 "writer": writer_run.model_id,
                 "reviewer": reviewer_run.model_id,
@@ -916,6 +1027,22 @@ class WorkflowRunner:
         }
         execution.db.flush()
         return None
+
+    @staticmethod
+    def _resolve_draft_blocks_to_persist(
+        writer_result: StructuredAgentResponse,
+        reviewer_result: StructuredAgentResponse,
+    ) -> list[str]:
+        writer_blocks = list(writer_result.payload.get("narrative_blocks") or [])
+        reviewer_blocks = list(reviewer_result.payload.get("revised_narrative_blocks") or [])
+        apply_mode = str(reviewer_result.payload.get("apply_mode") or "apply_revisions")
+        writer_flags = StoryAgentPipeline._detect_narrative_quality_flags(writer_blocks)
+        reviewer_flags = StoryAgentPipeline._detect_narrative_quality_flags(reviewer_blocks)
+        if apply_mode == "preserve_writer" and writer_blocks:
+            if writer_flags and reviewer_blocks and len(reviewer_flags) < len(writer_flags):
+                return reviewer_blocks
+            return writer_blocks
+        return reviewer_blocks or writer_blocks
 
     def _writer_scenes_step(self, execution: WorkflowExecution) -> str:
         chapter: Chapter = execution.state["chapter"]
