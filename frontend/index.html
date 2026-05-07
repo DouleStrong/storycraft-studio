@@ -7,6 +7,16 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const demoValues = new Set(["1", "true", "showcase", "demo"]);
+        if (demoValues.has(String(params.get("demo") || "").trim().toLowerCase())) {
+          document.body.dataset.demoBoot = "pending";
+          document.body.setAttribute("data-demo-protocol", window.location.protocol === "file:" ? "file" : "server");
+        }
+      })();
+    </script>
     <div class="grain"></div>
     <div class="app-shell">
       <header class="topbar">
@@ -53,6 +63,16 @@
             </label>
             <button class="primary-button" type="submit" id="authSubmitButton">创建账号</button>
           </form>
+        </div>
+      </section>
+
+      <section id="demoBootFallback" class="demo-boot-fallback" aria-live="polite">
+        <div>
+          <p class="eyebrow">Demo 展示版</p>
+          <h2>正在进入智能 NPC 工作台</h2>
+          <p>如果这里一直停留，通常是浏览器直接打开 file:// 文件时拦截了模块脚本。请通过本地静态服务访问体验版。</p>
+          <p class="demo-boot-command">在 frontend 目录运行：<code>python -m http.server 5500</code></p>
+          <a class="primary-button demo-boot-link" href="http://127.0.0.1:5500/index.html?demo=1">打开本地服务版 Demo</a>
         </div>
       </section>
 
@@ -160,6 +180,20 @@
 
           <div class="workspace-grid">
             <div class="column stack asset-column">
+              <nav class="figma-sidebar-tabs" aria-label="创作资源导航">
+                <button class="figma-sidebar-tab is-active" type="button">
+                  <span class="figma-tab-icon" aria-hidden="true">□</span>
+                  <span>章节</span>
+                </button>
+                <button class="figma-sidebar-tab" type="button">
+                  <span class="figma-tab-icon" aria-hidden="true">◇</span>
+                  <span>角色</span>
+                </button>
+                <button class="figma-sidebar-tab" type="button">
+                  <span class="figma-tab-icon" aria-hidden="true">◎</span>
+                  <span>世界</span>
+                </button>
+              </nav>
               <section class="subpanel rail-panel story-bible-panel">
                 <div class="subpanel-header">
                   <div>
@@ -201,6 +235,16 @@
 
             <div class="column stack rail-column">
               <section class="subpanel rail-panel agent-panel">
+                <nav class="figma-agent-tabs" aria-label="AI 协作面板">
+                  <button class="figma-agent-tab is-active" type="button">
+                    <span class="figma-tab-icon" aria-hidden="true">✦</span>
+                    <span>AI Agent</span>
+                  </button>
+                  <button class="figma-agent-tab" type="button">
+                    <span class="figma-tab-icon" aria-hidden="true">!</span>
+                    <span>Reviewer</span>
+                  </button>
+                </nav>
                 <div class="subpanel-header">
                   <div>
                     <p class="eyebrow">Agent 面板</p>
@@ -276,7 +320,50 @@
       </section>
     </div>
 
+    <div id="characterChatShell" class="character-chat-shell hidden" aria-hidden="true">
+      <div class="character-chat-backdrop" data-close-character-chat></div>
+      <section class="character-chat-dialog" aria-label="角色单独对话">
+        <aside id="characterChatAside" class="character-chat-aside"></aside>
+        <div class="character-chat-main">
+          <header id="characterChatHeader" class="character-chat-header"></header>
+          <div id="characterChatMessages" class="character-chat-messages"></div>
+          <div id="characterChatQuickReplies" class="character-chat-quick-replies"></div>
+          <form id="characterChatForm" class="character-chat-composer">
+            <input
+              id="characterChatInput"
+              name="chat_message"
+              type="text"
+              placeholder="输入你想和角色说的话"
+              autocomplete="off"
+            />
+            <button class="primary-button" type="button" data-send-character-chat>发送</button>
+          </form>
+        </div>
+      </section>
+    </div>
+
     <div id="toast" class="toast hidden"></div>
     <script type="module" src="./app.js"></script>
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const demoValues = new Set(["1", "true", "showcase", "demo"]);
+        if (!demoValues.has(String(params.get("demo") || "").trim().toLowerCase())) {
+          return;
+        }
+        window.setTimeout(() => {
+          if (document.body.dataset.demoMode === "true") {
+            document.body.removeAttribute("data-demo-boot");
+            return;
+          }
+          document.body.setAttribute("data-demo-protocol", window.location.protocol === "file:" ? "file" : "server");
+          const authPanel = document.getElementById("authPanel");
+          if (authPanel) {
+            authPanel.classList.add("hidden");
+          }
+          document.body.dataset.demoBoot = "pending";
+        }, 900);
+      })();
+    </script>
   </body>
 </html>

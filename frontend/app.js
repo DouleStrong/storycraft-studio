@@ -16,6 +16,15 @@ import { buildStoryBibleWorkbench } from "./story-bible-workbench.mjs";
 import { resolveWorkflowProgress } from "./workflow-progress.mjs";
 import { computeWorkspaceHeight, resolveWorkspaceDensity } from "./workspace-layout.mjs";
 import {
+  buildDemoSession,
+  getDemoBannerLabel,
+  getDemoReadOnlyMessage,
+  isDemoModeEnabled,
+  resolveDemoInitialRoute,
+  resolveDemoApiResponse,
+  resolveDemoInitialView,
+} from "./demo-mode.mjs";
+import {
   buildStudioRoute,
   buildProjectPayload,
   findPendingIntervention,
@@ -59,7 +68,35 @@ const state = {
   blockDrafts: {},
   sceneDrafts: {},
   dialogueDrafts: {},
+  activeCharacterChatId: null,
+  characterChatDraft: "",
+  characterChatMessages: {},
+  demoSidebarTab: "chapters",
+  demoAgentTab: "agent",
+  demoExpandedSceneId: null,
+  demoStageMode: "default",
 };
+
+const demoSession = isDemoModeEnabled(window.location.href) ? buildDemoSession() : null;
+
+if (demoSession) {
+  state.token = demoSession.token;
+  state.user = demoSession.user;
+  state.projects = demoSession.projects;
+  state.characterLibrary = demoSession.characterLibrary;
+  state.currentProjectId = demoSession.currentProjectId;
+  state.currentProject = demoSession.currentProject;
+  state.activeChapterId = demoSession.activeChapterId;
+  state.selectedJobId = demoSession.selectedJobId;
+  state.selectedJobDetail = demoSession.selectedJobDetail;
+  state.exportNotice = demoSession.exportNotice;
+  state.featuredExportId = demoSession.featuredExportId;
+  state.storyBibleRevisions = demoSession.storyBibleRevisions;
+  state.storyBibleDiffs = demoSession.storyBibleDiffsByProjectId?.[String(demoSession.currentProjectId)] || {};
+  state.chapterRevisions = demoSession.chapterRevisionsByChapterId || {};
+  state.chapterRevisionDiffs = demoSession.chapterRevisionDiffsByChapterId || {};
+  state.view = resolveDemoInitialView(demoSession);
+}
 
 const els = {
   appShell: document.querySelector(".app-shell"),
@@ -123,6 +160,13 @@ const els = {
   duplicateProjectButton: document.getElementById("duplicateProjectButton"),
   exportBundleButton: document.getElementById("exportBundleButton"),
   refreshProjectsButton: document.getElementById("refreshProjectsButton"),
+  characterChatShell: document.getElementById("characterChatShell"),
+  characterChatAside: document.getElementById("characterChatAside"),
+  characterChatHeader: document.getElementById("characterChatHeader"),
+  characterChatMessages: document.getElementById("characterChatMessages"),
+  characterChatQuickReplies: document.getElementById("characterChatQuickReplies"),
+  characterChatForm: document.getElementById("characterChatForm"),
+  characterChatInput: document.getElementById("characterChatInput"),
   toast: document.getElementById("toast"),
 };
 
@@ -137,6 +181,12 @@ function applyWorkspaceMode(width) {
 
 function syncWorkspaceMetrics() {
   if (!els.projectWorkspace || !els.workspaceGrid || !els.appShell) {
+    return;
+  }
+
+  if (demoSession) {
+    els.projectWorkspace.style.removeProperty("--workspace-grid-height");
+    els.projectWorkspace.dataset.density = "relaxed";
     return;
   }
 
@@ -521,6 +571,10 @@ async function setExportNotice(exportId, projectId = state.currentProjectId) {
   state.featuredExportId = Number(bundle.id);
 }
 
+function showDemoReadOnlyToast() {
+  showToast(getDemoReadOnlyMessage());
+}
+
 function clearAuthFeedback() {
   els.authFeedback.textContent = "";
   els.authFeedback.classList.add("hidden");
@@ -554,6 +608,9 @@ function buildRequestHeaders(initialHeaders = {}, hasJsonBody = false) {
 }
 
 async function api(path, options = {}) {
+  if (demoSession) {
+    return resolveDemoApiResponse(demoSession, path, options);
+  }
   const headers = buildRequestHeaders(options.headers || {}, Boolean(options.body && !(options.body instanceof FormData)));
 
   const response = await fetch(path, { ...options, headers });
@@ -699,6 +756,9 @@ async function handleTerminalJob(job) {
 }
 
 async function openJobStream(jobId) {
+  if (demoSession) {
+    return;
+  }
   const normalizedJobId = Number(jobId);
   if (!normalizedJobId || (state.streamingJobId === normalizedJobId && state.jobStreamController)) {
     return;
@@ -792,6 +852,9 @@ function syncSelectedJobStream() {
 function setSession(user, token) {
   state.user = user;
   state.token = token;
+  if (demoSession) {
+    return;
+  }
   localStorage.setItem("storycraft_user", JSON.stringify(user));
   localStorage.setItem("storycraft_token", token);
 }
@@ -817,12 +880,20 @@ function clearSession() {
   state.blockDrafts = {};
   state.sceneDrafts = {};
   state.dialogueDrafts = {};
+  if (demoSession) {
+    return;
+  }
   localStorage.removeItem("storycraft_user");
   localStorage.removeItem("storycraft_token");
 }
 
 function updateAuthUI() {
   const authenticated = Boolean(state.token && state.user);
+  document.body.dataset.demoMode = demoSession ? "true" : "false";
+  if (demoSession) {
+    document.body.removeAttribute("data-demo-boot");
+  }
+  els.appShell.dataset.demoMode = demoSession ? "true" : "false";
   els.authPanel.classList.toggle("hidden", authenticated);
   els.dashboardShell.classList.toggle("hidden", !authenticated || state.view !== "dashboard");
   els.workspaceShell.classList.toggle("hidden", !authenticated || state.view !== "workspace");
@@ -861,7 +932,7 @@ async function navigateToWorkspace(projectId, options = {}) {
 }
 
 async function syncStudioRoute(options = {}) {
-  if (!state.token) {
+  if (!state.token && !demoSession) {
     state.view = "dashboard";
     updateAuthUI();
     return;
@@ -907,6 +978,15 @@ async function syncStudioRoute(options = {}) {
   renderDashboard();
   renderProjectWorkspace();
   updateAuthUI();
+}
+
+function applyDemoBadge() {
+  if (!demoSession || !els.sessionBadge) {
+    return;
+  }
+  els.sessionBadge.classList.remove("hidden");
+  els.sessionBadge.dataset.demoMode = "true";
+  els.sessionBadge.textContent = `${getDemoBannerLabel()} | ${state.user?.pen_name || "作品集访客"}`;
 }
 
 function setAuthMode(mode) {
@@ -1113,6 +1193,437 @@ function findJobSummary(jobId) {
 
 function getActiveChapter() {
   return findChapterById(state.activeChapterId);
+}
+
+function getActiveCharacterChat() {
+  if (!state.currentProject || !state.activeCharacterChatId) {
+    return null;
+  }
+  return state.currentProject.characters.find((character) => character.id === Number(state.activeCharacterChatId)) || null;
+}
+
+function buildCharacterQuickReplies(character) {
+  const fallbacks = [
+    "你现在最在意什么？",
+    "如果我继续推进剧情，你会怎么回应？",
+    "用你的口吻介绍一下自己。",
+  ];
+  const profile = character.npc_dialogue_profile || {};
+  const replyPool = [
+    ...(profile.smart_replies || []),
+    character.signature_line,
+    character.goal,
+    character.speech_style,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .map((value) => value.slice(0, 28));
+  return [...new Set([...fallbacks, ...replyPool])].slice(0, 4);
+}
+
+function buildCharacterSeedMessages(character) {
+  const profile = character.npc_dialogue_profile || {};
+  const opening = profile.opening_line || character.signature_line || character.personality || "我在，继续吧。";
+  const followup = profile.need_signal
+    ? `我现在会观察的是：${profile.need_signal}`
+    : character.goal
+      ? `我当前最在意的是：${character.goal}`
+      : "我会根据当前剧情给出角色化回应。";
+  return [
+    {
+      id: `${character.id}-seed-1`,
+      sender: "character",
+      content: opening,
+      emotion: profile.friendship_stage || "角色状态已同步",
+      timestamp: "刚刚",
+    },
+    {
+      id: `${character.id}-seed-2`,
+      sender: "character",
+      content: followup,
+      emotion: profile.relationship_hook ? "关系判断已开启" : "个性对话模式",
+      timestamp: "刚刚",
+    },
+  ];
+}
+
+function ensureCharacterChatMessages(character) {
+  const key = String(character.id);
+  if (!state.characterChatMessages[key]?.length) {
+    state.characterChatMessages[key] = buildCharacterSeedMessages(character);
+  }
+  return state.characterChatMessages[key];
+}
+
+function buildDemoCharacterReply(character, prompt) {
+  const promptText = String(prompt || "").trim();
+  const profile = character.npc_dialogue_profile || {};
+  if (!promptText) {
+    return `${character.name}：你可以说得再具体一点，我会按当前关系和情绪继续回应你。`;
+  }
+
+  function buildTokens(text) {
+    const value = String(text || "").trim();
+    const tokens = value
+      .split(/[、，。；：？！,.!?\s]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    for (let index = 0; index < value.length - 1; index += 1) {
+      tokens.push(value.slice(index, index + 2));
+    }
+    return [...new Set(tokens.filter((item) => item.length >= 2))];
+  }
+
+  const matchedReaction = (profile.reaction_samples || []).find((sample) =>
+    buildTokens(sample.trigger).some((token) => promptText.includes(token)),
+  );
+  if (matchedReaction) {
+    return `${character.name}：${matchedReaction.response}（${matchedReaction.affection_delta || "关系变化待判断"}）`;
+  }
+
+  function includesAny(keywords) {
+    return keywords.some((keyword) => promptText.includes(keyword));
+  }
+
+  let intent = "generic";
+  if (includesAny(["为什么", "凭什么", "怀疑", "不信", "观察我", "监视", "动机", "试探", "拦我", "真假"])) {
+    intent = "challenge";
+  } else if (includesAny(["一起", "陪我", "陪你", "下次", "约定", "同行", "巡夜", "继续和你", "带你", "还会"])) {
+    intent = "companion";
+  } else if (includesAny(["难过", "沮丧", "害怕", "紧张", "担心", "迷茫", "压力", "累", "失望", "心情", "感受", "不开心"])) {
+    intent = "emotion";
+  } else if (includesAny(["规则", "学院", "怎么", "原理", "线索", "证据", "判断", "脚印", "回响", "结界", "试炼", "为什么会"])) {
+    intent = "knowledge";
+  } else if (includesAny(["介绍", "你是谁", "认识", "名字", "口吻", "你自己"])) {
+    intent = "intro";
+  }
+
+  const responsePoolsByCharacterId = {
+    101: {
+      knowledge: [
+        "学院的规则从来不只是为了限制你，它更像一套防止你在未知里失去判断的护栏。你如果愿意，我可以先陪你拆开其中最关键的一条。",
+        "先看规则保护了谁，再看规则束缚了谁。只要这个顺序不乱，你就不会被表面的仪式带偏。",
+        "你问的是方法，不是答案，这很好。我更愿意把判断路径告诉你，而不是直接替你决定。",
+      ],
+      emotion: [
+        "先别急着责怪自己。试炼里最常见的失误，不是做错选择，而是情绪一乱就不肯继续观察。",
+        "你现在需要的不是更快，而是更稳。把刚才最让你在意的那个瞬间告诉我，我们从那里重新看。",
+        "能把沮丧说出来，本身就是一种清醒。你先站在这里，我替你把局势理顺一点。",
+      ],
+      companion: [
+        "可以。只要你不是把同行当作依赖，而是愿意一起承担判断，我会继续陪你走下一段。",
+        "下次巡夜我会在第二道门等你。但我更在意的是，你到那时会不会比今晚更敢做决定。",
+        "我会和你一起去，不过你得先答应我，遇到分歧时先说理由，不要沉默。",
+      ],
+      challenge: [
+        "你会反问，说明你还没有把自己交给惯性。很好，我宁愿带一个会追问的人，也不想带一个只会点头的人。",
+        "我观察你，不是为了审判你，而是为了确认你值不值得被托付更深的线索。",
+        "如果你连动机都敢问出口，那我也可以坦白一点: 我在判断你会不会为了正确，牺牲掉你真正想保护的人。",
+      ],
+      intro: [
+        "你可以把我当成学院里最不急着给答案的人。我的职责不是替你通关，而是让你学会自己辨认方向。",
+        "我是薇岚，负责把新人从混乱里带到能独立判断的位置上。至于喜不喜欢你，要看你接下来的选择。",
+      ],
+      generic: [
+        "我听见了。你这句话背后真正的问题，不在表面，而在你准备为哪个结果负责。",
+        "先别把话说满。把你最在意的那个词留下来，我们就能继续往深处走。",
+        "你现在的反应，已经能说明很多事。我会按你的选择继续调整对你的判断。",
+      ],
+    },
+    102: {
+      knowledge: [
+        "要是把学院规则比作地图，它不是告诉你每一步怎么走，而是提醒你哪里会突然塌下去。我可以帮你挑最值得先看的那块。",
+        "线索其实已经在你身边啦，只是它们不爱排队。你先盯住最亮的那一个，剩下的我帮你串起来。",
+        "你问得好轻巧，但这题其实很关键。像铃的声音多半不是威胁，它更像有人想把你往回引。",
+      ],
+      emotion: [
+        "那我先陪你缓一下。你不用现在就变勇敢，先把最让你不舒服的地方说给我听。",
+        "我听出来啦，你不是做不到，是心里有点乱。没关系，我可以先替你记住那些容易漏掉的细节。",
+        "别一个人扛着呀。你要是愿意，我可以把刚才那些吓人的部分都拆成比较好处理的小块。",
+      ],
+      companion: [
+        "当然可以！你下次出发前叫我一声，我会把最好用的光路和最亮的尾光都准备好。",
+        "你要是愿意带上我，我会很认真地陪你。不是跟在后面那种，是会一起帮你找答案的那种。",
+        "说定了哦。下次如果雾又变重，我就负责给你指路，你负责别把我丢下。",
+      ],
+      challenge: [
+        "你这样问也没错啦，但我真不是在糊弄你。我只是想确认，你是在担心危险，还是在担心被骗。",
+        "你可以怀疑我，不过先别把门关上。我比大多数人都更希望你别走进错误的方向。",
+        "哎，被你这么一问我反而更认真了。那我也直说: 我是在试你会不会把疑问憋在心里。",
+      ],
+      intro: [
+        "我是霁光，负责把严肃的事变得没那么难靠近。如果你愿意，我也可以顺便当你的移动线索提示器。",
+        "你可以把我当成会飞的同行搭子。遇到好看的、危险的、奇怪的东西，我通常都会比别人先发现。",
+      ],
+      generic: [
+        "我懂你的意思啦，而且这句很像你会在岔路口说出来的话。我们可以顺着这个方向继续试一次。",
+        "你这句话让我有点在意。要不这样，我先把我听见的风声告诉你，你再决定往哪边走。",
+        "好呀，那我们就从这里继续。你负责选方向，我负责提醒你别错过那些会闪一下就消失的细节。",
+      ],
+    },
+    103: {
+      knowledge: [
+        "别只看表面。真正有用的线索通常不显眼，但它们彼此之间会对得上。",
+        "规则不是拿来背的，是拿来过滤噪音的。你要是分不清重点，就会被人牵着走。",
+        "想判断，就先找反常。脚印、停顿、呼吸、回头次数，任何一个都比空话可靠。",
+      ],
+      emotion: [
+        "情绪可以有，但别让它替你做决定。你要是还想往前走，就先把心跳压下来。",
+        "害怕没什么丢人的。真正丢人的是明明慌了，还假装自己看得很清楚。",
+        "如果你现在很乱，那就别急着证明自己。先把能确认的东西确认掉。",
+      ],
+      companion: [
+        "你想同行，可以。但我不会为了照顾你放慢判断节奏，你最好跟得上。",
+        "下次要不要一起，看你今晚表现。别把承诺说得太早，我更看行动。",
+        "可以继续并肩，但你得给出值得我信的理由。夜巡队不收只会依赖别人的人。",
+      ],
+      challenge: [
+        "你敢质疑我，比顺着我说强。至少这说明你还在自己判断。",
+        "我在意你的回答，是因为错误的人一旦走进第二章，会拖累整条线索。",
+        "想知道我为什么盯着你？因为你身上的犹豫和直觉都太明显，很难不看。",
+      ],
+      intro: [
+        "夜巡学员。职责是排除噪音，确认危险，顺便看看你是不是会在关键时刻犹豫。",
+        "名字不重要。你只要记住一件事: 我只尊重能拿出判断的人。",
+      ],
+      generic: [
+        "继续说。我在听，但我更在意你话里没说出来的部分。",
+        "这句不算无用，不过还不够。给我一个能落到证据上的理由。",
+        "你可以继续解释，但最好别空着来。我对模糊表态没兴趣。",
+      ],
+    },
+  };
+
+  const fallbackPools = {
+    knowledge: [
+      "先把你看到的、听到的和你推断的分开说，我会更容易顺着角色逻辑回应你。",
+      "这个问题可以继续展开，不过我会优先抓住与你当前剧情目标最相关的那一层。",
+    ],
+    emotion: [
+      "我能接住你的情绪，但我也会把它放回当前剧情情境里继续回应。",
+      "你先把感受说清楚，我会按这个角色最自然的方式接话。",
+    ],
+    companion: [
+      "如果你想建立更近的关系，我会记住这次选择，并在后续回应里体现出来。",
+      "这类问题最能拉开角色差异，我会按你们之间的关系阶段继续往下接。",
+    ],
+    challenge: [
+      "你的质疑会改变这场对话的走向，我会按角色的防御和信任策略回应你。",
+      "这种反问很有效，因为它能直接暴露角色真正的立场。",
+    ],
+    intro: [
+      "我会先按角色身份介绍自己，再慢慢把更深一层的动机露出来。",
+      "这种问题很适合拿来展示角色口吻和身份感。",
+    ],
+    generic: [
+      "我会继续保留角色口吻，但更具体的提问会让回应更有层次。",
+      "继续说下去吧，我会按当前关系、动机和情绪接住这句话。",
+    ],
+  };
+
+  const activePools = responsePoolsByCharacterId[character.id] || fallbackPools;
+  const replyPool = activePools[intent] || activePools.generic || fallbackPools.generic;
+  let hash = 0;
+  for (const char of promptText) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  const selectedReply = replyPool[hash % replyPool.length];
+  const relationshipLevel = Number(character.relationshipLevel || 0);
+  const relationshipTone = relationshipLevel >= 70 ? "你这句话会让我更愿意主动靠近你。" : relationshipLevel >= 40 ? "这会继续影响我对你的信任判断。" : "我暂时还不会完全放下戒备。";
+
+  if (intent === "emotion") {
+    return `${character.name}：${selectedReply} ${relationshipTone}`;
+  }
+  if (intent === "companion") {
+    return `${character.name}：${selectedReply} ${String(profile.relationship_hook || "").split("。")[0] || relationshipTone}`;
+  }
+  if (intent === "challenge") {
+    return `${character.name}：${selectedReply} ${relationshipTone}`;
+  }
+  return `${character.name}：${selectedReply}`;
+}
+
+function getCharacterAffinityLevel(character) {
+  return Math.max(1, Math.floor(Number(character.relationshipLevel || 0) / 20));
+}
+
+function getCharacterMemoryTags(character) {
+  const baseTags = Array.isArray(character.memoryTags) ? character.memoryTags : [];
+  const profile = character.npc_dialogue_profile || {};
+  const derivedTags = [profile.need_signal, profile.relationship_hook]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .map((value) => value.slice(0, 18));
+  return [...new Set([...baseTags, ...derivedTags])].slice(0, 4);
+}
+
+function openCharacterChat(characterId) {
+  if (!state.currentProject) {
+    return;
+  }
+  const targetId = Number(characterId);
+  const character = state.currentProject.characters.find((item) => item.id === targetId);
+  if (!character) {
+    return;
+  }
+  state.activeCharacterChatId = targetId;
+  ensureCharacterChatMessages(character);
+  renderCharacterChat();
+}
+
+function closeCharacterChat() {
+  state.activeCharacterChatId = null;
+  state.characterChatDraft = "";
+  renderCharacterChat();
+}
+
+function sendCharacterChatMessage(message = state.characterChatDraft) {
+  const character = getActiveCharacterChat();
+  const content = String(message || "").trim();
+  if (!character || !content) {
+    return;
+  }
+
+  const key = String(character.id);
+  const messages = ensureCharacterChatMessages(character);
+  messages.push({
+    id: `${key}-user-${Date.now()}`,
+    sender: "user",
+    content,
+    timestamp: "刚刚",
+  });
+  messages.push({
+    id: `${key}-npc-${Date.now() + 1}`,
+    sender: "character",
+    content: buildDemoCharacterReply(character, content),
+    emotion: "角色即时回应",
+    timestamp: "刚刚",
+  });
+  state.characterChatDraft = "";
+  renderCharacterChat();
+}
+
+function renderCharacterChat() {
+  if (!els.characterChatShell) {
+    return;
+  }
+
+  const character = getActiveCharacterChat();
+  if (!character) {
+    els.characterChatShell.classList.add("hidden");
+    els.characterChatShell.setAttribute("aria-hidden", "true");
+    if (els.characterChatInput) {
+      els.characterChatInput.value = "";
+    }
+    return;
+  }
+
+  const messages = ensureCharacterChatMessages(character);
+  const quickReplies = buildCharacterQuickReplies(character);
+  const profile = character.npc_dialogue_profile || {};
+  const avatar = escapeHtml(String(character.name || "角").slice(0, 1));
+  const personality = escapeHtml(character.personality || "角色性格待补充");
+  const mood = escapeHtml(character.currentMood || character.personality || character.goal || "个性对话已开启");
+  const interactionHint = escapeHtml(profile.need_signal || "你可以通过提问、共情和追问来触发不同回复。");
+  const relationshipHint = escapeHtml(profile.relationship_hook || "系统会继续记录你的对话选择。");
+  const memoryTags = getCharacterMemoryTags(character);
+  const relationshipLevel = Math.max(0, Math.min(100, Number(character.relationshipLevel || 0)));
+  const affinityLevel = getCharacterAffinityLevel(character);
+
+  els.characterChatAside.innerHTML = `
+    <div class="character-chat-aside-top">
+      <button class="ghost-button character-chat-back-button" type="button" data-close-character-chat>← 返回工作台</button>
+      <div class="character-chat-avatar">${avatar}</div>
+      <div class="character-chat-identity">
+        <h3>${escapeHtml(character.name)}</h3>
+        <p class="muted">${escapeHtml(character.role || "智能 NPC")}</p>
+        <span class="status-chip">${escapeHtml(character.status || "在线可聊")}</span>
+      </div>
+    </div>
+    <section class="character-chat-aside-section">
+      <div class="character-chat-progress-head">
+        <span class="character-chat-section-label">关系进度</span>
+        <span class="mini-chip">${escapeHtml(character.relationship || "关系建立中")}</span>
+      </div>
+      <div class="character-chat-progress-track" aria-label="角色关系进度">
+        <span style="width: ${relationshipLevel}%"></span>
+      </div>
+      <div class="character-chat-progress-meta">
+        <span>好感度 Lv.${escapeHtml(affinityLevel)}</span>
+        <span>${escapeHtml(profile.friendship_stage || `${relationshipLevel}% 已建立联系`)}</span>
+      </div>
+    </section>
+    <section class="character-chat-aside-section">
+      <span class="character-chat-section-label">性格特质</span>
+      <p>${personality}</p>
+    </section>
+    <section class="character-chat-aside-section">
+      <span class="character-chat-section-label">当前情绪</span>
+      <p>${mood}</p>
+    </section>
+    <section class="character-chat-aside-section">
+      <span class="character-chat-section-label">记忆标签</span>
+      <div class="chip-row">
+        ${memoryTags.length ? memoryTags.map((tag) => `<span class="mini-chip">${escapeHtml(tag)}</span>`).join("") : `<span class="mini-chip">等待补充设定</span>`}
+      </div>
+    </section>
+    <section class="character-chat-aside-section">
+      <span class="character-chat-section-label">互动提示</span>
+      <p>${interactionHint}</p>
+      <p class="character-chat-helper-note">${relationshipHint}</p>
+    </section>
+  `;
+
+  els.characterChatHeader.innerHTML = `
+    <div class="character-chat-header-main">
+      <div class="character-chat-header-avatar">${avatar}</div>
+      <div class="character-chat-header-copy">
+        <h3>${escapeHtml(character.name)}</h3>
+        <p>正在与你对话</p>
+      </div>
+    </div>
+    <div class="character-chat-header-actions">
+      <span class="mini-chip is-live">Demo 对话演示</span>
+      <button class="ghost-button character-chat-header-button" type="button" aria-label="更多操作">···</button>
+    </div>
+  `;
+
+  els.characterChatMessages.innerHTML = messages
+    .map(
+      (entry) => `
+        <article class="chat-message ${entry.sender === "user" ? "is-user" : "is-character"}">
+          <div class="chat-message-avatar">${entry.sender === "user" ? "我" : avatar}</div>
+          <div class="chat-message-bubble">
+            ${entry.emotion && entry.sender === "character" ? `<span class="chat-message-emotion">「${escapeHtml(entry.emotion)}」</span>` : ""}
+            <p>${escapeHtml(entry.content)}</p>
+            <span class="chat-message-time">${escapeHtml(entry.timestamp || "刚刚")}</span>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+
+  els.characterChatQuickReplies.innerHTML = `
+    <span class="character-chat-section-label">快捷发问</span>
+    <div class="character-chat-reply-list">
+      ${quickReplies
+        .map(
+          (reply) => `
+            <button class="ghost-button" type="button" data-quick-character-reply="${escapeHtml(reply)}">${escapeHtml(reply)}</button>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+
+  els.characterChatInput.value = state.characterChatDraft || "";
+  els.characterChatInput.placeholder = `继续和 ${character.name} 对话`;
+  els.characterChatShell.classList.remove("hidden");
+  els.characterChatShell.setAttribute("aria-hidden", "false");
+  window.requestAnimationFrame(() => {
+    els.characterChatMessages.scrollTop = els.characterChatMessages.scrollHeight;
+    els.characterChatInput.focus();
+  });
 }
 
 function findLiveChapterJob(chapterId) {
@@ -1384,11 +1895,18 @@ function renderCharacters(project) {
     ? project.characters
         .map(
           (character) => `
-            <article class="character-card">
+            <article class="character-card character-card-chat-ready">
+              <button
+                class="character-card-hitarea"
+                type="button"
+                data-open-character-chat="${character.id}"
+                aria-label="和 ${escapeHtml(character.name)} 单独对话"
+              ></button>
               <div class="character-card-head">
                 <div class="character-card-title">
                   <p class="eyebrow">${escapeHtml(character.role)}</p>
                   <h4>${escapeHtml(character.name)}</h4>
+                  <button class="character-chat-launch" type="button" data-open-character-chat="${character.id}">进入单聊</button>
                 </div>
                 <div class="chip-row">
                   <span class="mini-chip ${character.reference_images?.[0] ? "is-live" : ""}">
@@ -1713,7 +2231,7 @@ function renderSceneCard(scene) {
   `;
 
   return `
-    <article class="scene-card">
+    <article class="scene-card figma-scene-card">
       <div class="scene-heading">
         <div>
           <p class="eyebrow">${escapeHtml(scene.scene_type)} · ${escapeHtml(scene.time_of_day)}</p>
@@ -1770,6 +2288,20 @@ function renderSceneCard(scene) {
       <p class="muted"><strong>目标：</strong>${escapeHtml(scene.objective)}</p>
       <p class="muted"><strong>情绪：</strong>${escapeHtml(scene.emotional_tone)}</p>
       <p class="muted"><strong>出场：</strong>${escapeHtml(scene.cast_names.join(" / ") || "待补全")}</p>
+      <div class="figma-scene-summary">
+        <div>
+          <span class="figma-scene-metric">${escapeHtml(scene.dialogue_blocks.length)}</span>
+          <span>对话</span>
+        </div>
+        <div>
+          <span class="figma-scene-metric">${escapeHtml(scene.illustrations.length)}</span>
+          <span>剧照</span>
+        </div>
+        <div>
+          <span class="figma-scene-metric">${scene.is_locked ? "锁" : "开"}</span>
+          <span>状态</span>
+        </div>
+      </div>
       <div class="dialogue-stack">${dialogues}</div>
       ${
         scene.visual_prompt
@@ -1832,6 +2364,11 @@ function renderChapterDetail(project) {
 
   els.chapterDetail.innerHTML = `
     <article class="chapter-card chapter-workspace">
+      <div class="stage-mode-switcher" aria-label="章节生成模式">
+        <button class="stage-mode-pill is-active" type="button">默认</button>
+        <button class="stage-mode-pill" type="button">AI 生成中</button>
+        <button class="stage-mode-pill" type="button">Reviewer 审校</button>
+      </div>
       <div class="chapter-header">
         <div>
           <p class="eyebrow">第 ${chapter.order_index} 章</p>
@@ -2063,6 +2600,10 @@ function renderAgentFocusPanel(project) {
 
   els.agentFocus.innerHTML = `
     <section class="agent-focus-card agent-surface is-${escapeHtml(focus.tone)}">
+      <div class="figma-agent-status">
+        <span class="figma-agent-dot" aria-hidden="true"></span>
+        <span>智能协作台</span>
+      </div>
       <div class="agent-focus-header">
         <div>
           <p class="eyebrow">${escapeHtml(focus.eyebrow)}</p>
@@ -2359,6 +2900,527 @@ function renderExports(project) {
           .join("")}
       </div>
     </section>
+    `;
+}
+
+function getDemoChapterStatus(chapter) {
+  if (findPendingIntervention(chapter)) {
+    return { label: "Review 中", className: "is-warn" };
+  }
+  if (chapter.status === "scenes_ready") {
+    return { label: "场景就绪", className: "is-live" };
+  }
+  if (chapter.status === "outline_ready") {
+    return { label: "大纲就绪", className: "" };
+  }
+  return { label: formatChapterStatus(chapter.status), className: "" };
+}
+
+function renderDemoChapterList(project) {
+  return project.chapters
+    .map((chapter) => {
+      const status = getDemoChapterStatus(chapter);
+      const isSelected = chapter.id === state.activeChapterId;
+      const statusLabel = status.label === "Review 中" ? "审校中" : status.label === "场景就绪" ? "已完成" : "草稿";
+      return `
+        <button
+          class="demo-list-card demo-chapter-card ${isSelected ? "is-selected" : ""}"
+          type="button"
+          data-select-chapter="${chapter.id}"
+        >
+          <span class="demo-list-card-body">
+            <span class="demo-list-card-kicker">第 ${escapeHtml(chapter.order_index)} 章</span>
+            <strong>${escapeHtml(chapter.title)}</strong>
+            <span class="demo-chapter-card-meta">
+              <span class="demo-chapter-card-status ${status.className}">
+                <span class="demo-status-dot ${status.className}" aria-hidden="true"></span>
+                ${escapeHtml(statusLabel)}
+              </span>
+              <span>${escapeHtml(chapter.scenes.length)} 场景</span>
+            </span>
+          </span>
+          ${isSelected ? `<span class="demo-chapter-card-arrow" aria-hidden="true">›</span>` : `<span class="demo-status-dot ${status.className}" aria-hidden="true"></span>`}
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function renderDemoCharacterList(project) {
+  return project.characters
+    .map((character) => {
+      const avatar = escapeHtml(String(character.name || "角").slice(0, 1));
+      return `
+        <button
+          class="demo-list-card demo-character-card"
+          type="button"
+          data-open-character-chat="${character.id}"
+          aria-label="与 ${escapeHtml(character.name)} 单独对话"
+        >
+          <span class="demo-character-avatar">${avatar}</span>
+          <span class="demo-list-card-body">
+            <strong>${escapeHtml(character.name)}</strong>
+            <span>${escapeHtml(character.role || "智能 NPC")}</span>
+          </span>
+          <span class="demo-chat-cue">单聊</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function renderDemoWorldList(project) {
+  const storyBible = project.story_bible || {};
+  const worldCards = [
+    { label: "核心设定", value: storyBible.world_notes || project.logline },
+    { label: "对白规则", value: storyBible.style_notes || project.tone },
+    { label: "互动边界", value: (storyBible.writing_rules || []).join(" / ") || storyBible.addressing_rules },
+  ];
+
+  return worldCards
+    .map(
+      (card) => `
+        <article class="demo-world-card">
+          <span>${escapeHtml(card.label)}</span>
+          <p>${escapeHtml(card.value || "待补充")}</p>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function renderDemoIcon(name) {
+  const icons = {
+    book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 0 4 24V4.5A2.5 2.5 0 0 1 6.5 2Z"/></svg>',
+    users: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/></svg>',
+    save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>',
+    download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8.92 4.6H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.64 0 1.22.38 1.48.97.08.2.12.41.12.63s-.04.43-.12.63c-.26.59-.84.97-1.48.97Z"/></svg>',
+    wand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/><path d="m17.8 11.8 1.4 1.4"/><path d="m4.8 4.8 1.4 1.4"/><path d="m17.8 6.2 1.4-1.4"/><path d="m4.8 13.2 1.4-1.4"/><path d="m3 21 9-9"/><path d="M12.2 6.2a3 3 0 1 1 4.24 4.24 3 3 0 0 1-4.24-4.24Z"/></svg>',
+    sparkles: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3Z"/><path d="M19 2v4"/><path d="M21 4h-4"/><path d="M5 16v6"/><path d="M8 19H2"/></svg>',
+    message: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/></svg>',
+    image: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.6-3.6a2 2 0 0 0-2.8 0L6 20"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.33-6-11a6 6 0 0 1 12 0c0 5.67-6 11-6 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
+  };
+  return icons[name] || "";
+}
+
+function findDemoSpeakerCharacter(project, speaker) {
+  const normalizedSpeaker = String(speaker || "").replace(/\s+/g, "");
+  const projectCharacters = Array.isArray(project?.characters) ? project.characters : [];
+  const libraryCharacters =
+    typeof state !== "undefined" && Array.isArray(state.characterLibrary) ? state.characterLibrary : [];
+  const candidates = [...projectCharacters, ...libraryCharacters];
+  return (
+    candidates.find((character) => {
+      const name = String(character?.name || "").replace(/\s+/g, "");
+      const compactSpeaker = normalizedSpeaker.replace(/导师|学员|伙伴/g, "");
+      const compactName = name.replace(/导师|学员|伙伴/g, "");
+      return (
+        normalizedSpeaker.includes(name) ||
+        name.includes(normalizedSpeaker) ||
+        (compactSpeaker && compactSpeaker === compactName)
+      );
+    }) || null
+  );
+}
+
+function getDemoSpeakerVariant(project, speaker) {
+  const character = findDemoSpeakerCharacter(project, speaker);
+  if (character?.id === 101 || String(speaker || "").includes("薇岚")) {
+    return "is-mentor";
+  }
+  if (character?.id === 102 || String(speaker || "").includes("霁光")) {
+    return "is-sprite";
+  }
+  return "is-rival";
+}
+
+function renderDemoDialogueLine(project, scene, dialogue) {
+  const speaker = String(dialogue.speaker || "角色");
+  const avatar = escapeHtml(speaker.slice(0, 1));
+  const emotion = String(dialogue.parenthetical || scene.emotional_tone || "").trim();
+  return `
+    <article class="demo-dialogue-line">
+      <span class="demo-dialogue-avatar ${getDemoSpeakerVariant(project, speaker)}">${avatar}</span>
+      <div class="demo-dialogue-line-body">
+        <div class="demo-dialogue-line-head">
+          <strong>${escapeHtml(speaker)}</strong>
+          ${emotion ? `<span class="demo-dialogue-emotion">${escapeHtml(emotion)}</span>` : ""}
+        </div>
+        <p>${escapeHtml(dialogue.content || "")}</p>
+      </div>
+    </article>
+  `;
+}
+
+function renderDemoDialogueWorkbench(project, chapter) {
+  const expandedScene = chapter.scenes.find(
+    (scene) => Number(state.demoExpandedSceneId || 0) === Number(scene.id),
+  );
+  if (!expandedScene || !expandedScene.dialogue_blocks?.length) {
+    return "";
+  }
+
+  const sceneIndex = chapter.scenes.findIndex((scene) => Number(scene.id) === Number(expandedScene.id));
+  return `
+    <section class="demo-dialogue-workbench">
+      <div class="demo-dialogue-workbench-head">
+        <div class="demo-dialogue-workbench-copy">
+          <span class="demo-dialogue-workbench-kicker">
+            <span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("sparkles")}</span>
+            NPC 对话预览
+          </span>
+          <div class="demo-dialogue-workbench-title-row">
+            <h3>${escapeHtml(expandedScene.title)}</h3>
+            <span class="demo-dialogue-scene-label">Scene ${escapeHtml(sceneIndex + 1)} - ${escapeHtml(expandedScene.title)}</span>
+          </div>
+        </div>
+      </div>
+      <div class="demo-dialogue-list">
+        ${expandedScene.dialogue_blocks.map((dialogue) => renderDemoDialogueLine(project, expandedScene, dialogue)).join("")}
+      </div>
+      <div class="demo-dialogue-actions">
+        <button class="demo-toolbar-button demo-toolbar-ghost" type="button">编辑对话</button>
+        <button class="demo-toolbar-button demo-toolbar-soft" type="button">
+          <span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("wand")}</span>
+          <span>AI 优化润色</span>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderDemoSidebar(project) {
+  const activeTab = state.demoSidebarTab || "chapters";
+  const panels = {
+    chapters: renderDemoChapterList(project),
+    characters: renderDemoCharacterList(project),
+    world: renderDemoWorldList(project),
+  };
+
+  return `
+    <aside class="demo-sidebar" aria-label="剧情资源">
+      <nav class="demo-sidebar-tabs figma-sidebar-tabs" aria-label="剧情资源分类">
+        <button class="${activeTab === "chapters" ? "is-active" : ""}" type="button" data-demo-sidebar-tab="chapters">
+          <span class="demo-tab-icon" aria-hidden="true">${renderDemoIcon("book")}</span>
+          <span>章节</span>
+        </button>
+        <button class="${activeTab === "characters" ? "is-active" : ""}" type="button" data-demo-sidebar-tab="characters">
+          <span class="demo-tab-icon" aria-hidden="true">${renderDemoIcon("users")}</span>
+          <span>角色</span>
+        </button>
+        <button class="${activeTab === "world" ? "is-active" : ""}" type="button" data-demo-sidebar-tab="world">
+          <span class="demo-tab-icon" aria-hidden="true">${renderDemoIcon("globe")}</span>
+          <span>世界</span>
+        </button>
+      </nav>
+      <div class="demo-sidebar-scroll">
+        ${panels[activeTab] || panels.chapters}
+      </div>
+    </aside>
+  `;
+}
+
+function getDemoSceneStatus(scene, chapter) {
+  if (scene.dialogue_blocks?.length) {
+    return { label: "已完成", className: "is-live", progress: null };
+  }
+  return { label: "草稿", className: "", progress: null };
+}
+
+function renderDemoSceneCard(scene, index, chapter) {
+  const status = getDemoSceneStatus(scene, chapter);
+  const isExpanded = Number(state.demoExpandedSceneId || 0) === Number(scene.id);
+  const summary = scene.objective || scene.visual_prompt || "场景目标待补充";
+  const sceneStatusLabel = status.label === "Reviewer 待处理" ? "Reviewer 待处理" : status.label;
+  return `
+    <article class="demo-scene-card ${isExpanded ? "is-expanded" : ""} ${status.className}">
+      <button class="demo-scene-trigger" type="button" data-demo-expand-scene="${scene.id}" aria-pressed="${isExpanded ? "true" : "false"}">
+        <span class="demo-scene-number">${escapeHtml(index + 1)}</span>
+        <span class="demo-scene-card-body">
+          <span class="demo-scene-card-head">
+            <strong>${escapeHtml(scene.title)}</strong>
+            <span class="demo-scene-card-status">
+              <span class="demo-status-dot ${status.className}" aria-hidden="true"></span>
+              ${escapeHtml(sceneStatusLabel)}
+            </span>
+          </span>
+          <span class="demo-scene-copy">${escapeHtml(summary)}</span>
+        </span>
+      </button>
+      <div class="demo-scene-meta">
+        <span class="demo-scene-meta-item"><span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("message")}</span>${escapeHtml(scene.dialogue_blocks.length)} 段对话</span>
+        <span class="demo-scene-meta-item"><span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("image")}</span>${escapeHtml(scene.illustrations.length)} 张场景图</span>
+        <span class="demo-scene-meta-item"><span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("pin")}</span>${escapeHtml(scene.location || "地点待定")}</span>
+      </div>
+      ${
+        status.progress
+          ? `
+            <div class="demo-progress-row">
+              <span>正在等待 Reviewer 处理建议</span>
+              <strong>${escapeHtml(status.progress)}%</strong>
+              <div class="demo-progress-track"><span style="width: ${escapeHtml(status.progress)}%"></span></div>
+            </div>
+          `
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderDemoMainStage(project) {
+  const chapter = getActiveChapter() || project.chapters[0];
+  if (!chapter) {
+    return `
+      <main class="demo-main-stage">
+        <section class="demo-empty-panel">
+          <h2>暂无可展示章节</h2>
+          <p>Demo 数据加载后会在这里展示场景流。</p>
+        </section>
+      </main>
+    `;
+  }
+
+  const status = getDemoChapterStatus(chapter);
+  const dialogueCount = chapter.scenes.reduce((sum, scene) => sum + scene.dialogue_blocks.length, 0);
+  const imageCount = chapter.scenes.reduce((sum, scene) => sum + scene.illustrations.length, 0);
+  const heroSummary = chapter.summary || project.logline;
+  const statusLabel = status.label === "Review 中" ? "Review 中" : `${status.label}`;
+  const activeMode = state.demoStageMode || "default";
+
+  return `
+    <main class="demo-main-stage">
+      <div class="demo-main-stage-shell">
+        <section class="demo-chapter-hero">
+          <div class="demo-chapter-hero-top">
+            <div class="demo-chapter-hero-copy">
+              <span class="demo-kicker">第 ${escapeHtml(chapter.order_index)} 章</span>
+              <h2>${escapeHtml(chapter.title)}</h2>
+              <p class="demo-chapter-hero-summary">${escapeHtml(heroSummary)}</p>
+            </div>
+            <div class="demo-chapter-actions">
+              <button class="demo-hero-action-button" type="button" aria-label="查看角色关系">
+                <span class="demo-hero-action-icon" aria-hidden="true">${renderDemoIcon("users")}</span>
+                <span>角色关系</span>
+              </button>
+              <button class="demo-hero-action-button" type="button" aria-label="查看场景生成状态">
+                <span class="demo-hero-action-icon" aria-hidden="true">${renderDemoIcon("wand")}</span>
+                <span>生成场景</span>
+              </button>
+            </div>
+          </div>
+          <div class="demo-chapter-metrics">
+            <span><i class="demo-metric-dot is-green" aria-hidden="true"></i><b>${escapeHtml(chapter.scenes.length)}</b> 个场景</span>
+            <span><i class="demo-metric-dot is-blue" aria-hidden="true"></i><b>${escapeHtml(dialogueCount)}</b> 段对话</span>
+            <span><i class="demo-metric-dot is-purple" aria-hidden="true"></i><b>${escapeHtml(imageCount)}</b> 张场景图</span>
+            <span class="demo-chapter-status-pill ${status.className}">${escapeHtml(statusLabel)}</span>
+          </div>
+        </section>
+
+        <section class="demo-scene-section">
+          <div class="demo-section-head">
+            <h3>场景流程</h3>
+            <div class="stage-mode-switcher" aria-label="章节生成状态">
+              <button class="stage-mode-pill ${activeMode === "default" ? "is-active" : ""}" type="button" data-demo-stage-mode="default">默认工作态</button>
+              <button class="stage-mode-pill is-tone-blue ${activeMode === "generating" ? "is-active" : ""}" type="button" data-demo-stage-mode="generating">AI 生成中</button>
+              <button class="stage-mode-pill is-tone-gold ${activeMode === "reviewing" ? "is-active" : ""}" type="button" data-demo-stage-mode="reviewing">Reviewer 待处理</button>
+            </div>
+          </div>
+          <div class="demo-scene-list">
+            ${
+              chapter.scenes.length
+                ? chapter.scenes.map((scene, index) => renderDemoSceneCard(scene, index, chapter)).join("")
+                : `<article class="demo-empty-panel"><h3>本章仍在大纲阶段</h3><p>${escapeHtml(chapter.chapter_goal || "后续可继续拆成场景。")}</p></article>`
+            }
+          </div>
+        </section>
+        ${renderDemoDialogueWorkbench(project, chapter)}
+      </div>
+    </main>
+  `;
+}
+
+function renderDemoAgentPanel(project) {
+  const activeTab = state.demoAgentTab || "agent";
+  const workbench = buildAgentWorkbench(project, {
+    selectedJobDetail: state.selectedJobDetail,
+    activeChapterId: state.activeChapterId,
+  });
+  const reviewerItems = (state.selectedJobDetail?.pending_interventions || [])
+    .map((item) => ({
+      title: formatInterventionLabel(item.intervention_type),
+      scene: `第 ${getActiveChapter()?.order_index || 1} 章`,
+      message: item.reviewer_notes || item.suggested_guidance,
+      type: "warning",
+    }))
+    .concat([
+      {
+        title: "节奏建议",
+        scene: "Scene 1",
+        message: "把连续说明拆成导师追问与精灵补充，让玩家更快进入可互动状态。",
+        type: "suggestion",
+      },
+    ]);
+
+  function getTaskTypeLabel(item) {
+    const title = String(item.title || "");
+    if (title.includes("导出")) {
+      return "导出";
+    }
+    if (title.includes("场景")) {
+      return "场景";
+    }
+    if (title.includes("正文")) {
+      return "正文";
+    }
+    if (title.includes("大纲")) {
+      return "大纲";
+    }
+    return title.split("生成")[0] || "任务";
+  }
+
+  function getTaskStatusLabel(item) {
+    if (item.isFocus) {
+      return "当前焦点";
+    }
+    if (item.status === "awaiting_user") {
+      return "待确认";
+    }
+    if (item.status === "processing") {
+      return "进行中";
+    }
+    if (item.status === "completed") {
+      return "已完成";
+    }
+    return "排队中";
+  }
+
+  function getTaskSortWeight(item) {
+    if (item.isFocus) {
+      return 0;
+    }
+    if (item.status === "awaiting_user") {
+      return 1;
+    }
+    if (item.status === "processing") {
+      return 2;
+    }
+    if (item.status === "queued") {
+      return 3;
+    }
+    if (item.status === "completed") {
+      return 4;
+    }
+    return 5;
+  }
+
+  const sortedHistory = [...workbench.history]
+    .sort((left, right) => {
+      const weightDiff = getTaskSortWeight(left) - getTaskSortWeight(right);
+      if (weightDiff !== 0) {
+        return weightDiff;
+      }
+      return Number(right.jobId || 0) - Number(left.jobId || 0);
+    });
+
+  const taskCards = sortedHistory.length
+    ? sortedHistory.slice(0, 4).map(
+        (item) => `
+          <button class="demo-task-card ${item.isFocus ? "is-focus" : ""}" type="button" data-select-job="${item.jobId}">
+            <div class="demo-task-card-head">
+              <span class="demo-task-type">${escapeHtml(getTaskTypeLabel(item))}</span>
+              <span class="demo-task-status is-subtle">${escapeHtml(getTaskStatusLabel(item))}</span>
+            </div>
+            <strong>${escapeHtml(item.title)}</strong>
+            <span class="demo-task-summary">${escapeHtml(item.summary)}</span>
+            <div class="demo-task-meta">
+              <span>${escapeHtml(item.chapterLabel || item.currentStepLabel || "StoryCraft Demo")}</span>
+              <span>${escapeHtml(item.progressLabel || "100%")}</span>
+            </div>
+            ${
+              item.progressLabel
+                ? `<div class="demo-progress-track"><span style="width: ${escapeHtml(item.progressLabel.replace(/[^0-9]/g, "") || 100)}%"></span></div>`
+                : ""
+            }
+          </button>
+        `,
+      )
+    : [
+        `<article class="demo-task-card"><strong>暂无任务</strong><span>生成任务会展示在这里。</span></article>`,
+      ];
+
+  const reviewerCards = reviewerItems.map(
+    (item) => `
+      <article class="demo-review-card ${item.type === "warning" ? "is-warn" : ""}">
+        <div class="demo-review-card-head">
+          <span>${escapeHtml(item.scene)}</span>
+          <span class="demo-task-status is-subtle">${item.type === "warning" ? "警告" : "建议"}</span>
+        </div>
+        <strong>${escapeHtml(item.title)}</strong>
+        <p>${escapeHtml(item.message)}</p>
+      </article>
+    `,
+  );
+
+  return `
+    <aside class="demo-ai-panel" aria-label="AI 协作面板">
+      <nav class="demo-agent-tabs figma-agent-tabs" aria-label="AI 面板分类">
+        <button class="${activeTab === "agent" ? "is-active" : ""}" type="button" data-demo-agent-tab="agent">
+          <span class="demo-agent-tab-icon" aria-hidden="true">${renderDemoIcon("sparkles")}</span>
+          <span>AI Agent</span>
+        </button>
+        <button class="${activeTab === "reviewer" ? "is-active" : ""}" type="button" data-demo-agent-tab="reviewer">
+          <span>Reviewer</span>
+          <span class="demo-agent-count-badge" aria-label="${escapeHtml(reviewerItems.length)} 条审校反馈">${escapeHtml(reviewerItems.length)}</span>
+        </button>
+      </nav>
+      <div class="demo-ai-scroll">
+        ${
+          activeTab === "reviewer"
+            ? `
+              <div class="demo-panel-label">审校反馈</div>
+              <div class="demo-review-list">${reviewerCards.join("")}</div>
+            `
+            : `
+              <div class="demo-panel-label">生成任务队列</div>
+              <div class="demo-task-list">${taskCards.join("")}</div>
+            `
+        }
+      </div>
+    </aside>
+  `;
+}
+
+function renderDemoProjectWorkspace(project) {
+  return `
+    <div class="figma-demo-workspace">
+      <header class="figma-demo-topbar">
+        <div class="demo-brand">
+          <span class="demo-brand-mark" aria-hidden="true">✦</span>
+          <strong>StoryCraft Studio</strong>
+        </div>
+        <div class="demo-topbar-meta">
+          <span>当前项目</span>
+          <strong>${escapeHtml(project.title)}</strong>
+        </div>
+        <div class="demo-topbar-meta">
+          <span>当前章节</span>
+          <strong>${escapeHtml(getActiveChapter()?.title || project.chapters[0]?.title || "未选择")}</strong>
+        </div>
+        <div class="demo-topbar-actions">
+          <button class="demo-toolbar-button demo-toolbar-ghost" type="button"><span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("save")}</span><span>保存草稿</span></button>
+          <button class="demo-toolbar-button is-primary" type="button"><span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("download")}</span><span>导出交付</span></button>
+          <button class="demo-square-button" type="button" aria-label="设置"><span class="demo-toolbar-icon" aria-hidden="true">${renderDemoIcon("settings")}</span></button>
+        </div>
+      </header>
+      <div class="figma-demo-grid">
+        ${renderDemoSidebar(project)}
+        ${renderDemoMainStage(project)}
+        ${renderDemoAgentPanel(project)}
+      </div>
+    </div>
   `;
 }
 
@@ -2386,6 +3448,7 @@ function renderProjectWorkspace() {
     els.storyBibleDetail.innerHTML = "";
     els.characterLibrarySummary.textContent = `全局角色库 ${state.characterLibrary.length} 个`;
     els.workspaceHeading.textContent = "独立项目创作中";
+    closeCharacterChat();
     closeStoryBibleModal();
     renderCharacterModal();
     updateAuthUI();
@@ -2397,6 +3460,17 @@ function renderProjectWorkspace() {
   els.emptyState.classList.add("hidden");
   els.projectWorkspace.classList.remove("hidden");
   els.projectWorkspace.dataset.layoutMode = state.layoutMode;
+  if (demoSession) {
+    els.projectWorkspace.classList.add("is-figma-demo");
+    els.projectWorkspace.dataset.layoutMode = "wide";
+    els.projectWorkspace.innerHTML = renderDemoProjectWorkspace(project);
+    renderCharacterChat();
+    updateAuthUI();
+    restoreScrollState(preservedScrollState, (key) => getWorkspaceScrollTargets()[key]);
+    return;
+  }
+
+  els.projectWorkspace.classList.remove("is-figma-demo");
   els.deleteProjectButton.disabled = false;
   els.openStoryBibleButton.disabled = false;
   els.workspaceHeading.textContent = `《${project.title}》工作空间`;
@@ -2423,6 +3497,7 @@ function renderProjectWorkspace() {
   renderTracePanel();
   renderExports(project);
   renderExportReadyBanner();
+  renderCharacterChat();
   updateAuthUI();
   window.requestAnimationFrame(syncWorkspaceMetrics);
   restoreScrollState(preservedScrollState, (key) => getWorkspaceScrollTargets()[key]);
@@ -2452,7 +3527,8 @@ async function loadProjects() {
   await loadCharacterLibrary();
   renderDashboard();
   if (!window.location.hash) {
-    replaceStudioHash("dashboard");
+    const initialRoute = demoSession ? resolveDemoInitialRoute(demoSession) : { view: "dashboard", projectId: null };
+    replaceStudioHash(initialRoute.view, initialRoute.projectId);
   }
   await syncStudioRoute();
 }
@@ -2685,6 +3761,10 @@ els.authForm.addEventListener("submit", async (event) => {
 });
 
 els.logoutButton.addEventListener("click", () => {
+  if (demoSession) {
+    showDemoReadOnlyToast();
+    return;
+  }
   clearSession();
   replaceStudioHash("dashboard");
   updateAuthUI();
@@ -2695,6 +3775,10 @@ els.logoutButton.addEventListener("click", () => {
 
 els.projectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (demoSession) {
+    showDemoReadOnlyToast();
+    return;
+  }
   let createdProjectId = null;
   try {
     await withSubmitForm(event, async (form) => {
@@ -2724,6 +3808,27 @@ els.newCharacterButton.addEventListener("click", () => {
   openCharacterModal("create");
 });
 
+els.characterChatForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendCharacterChatMessage();
+});
+
+els.characterChatInput?.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+  state.characterChatDraft = target.value;
+});
+
+els.characterChatInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  sendCharacterChatMessage();
+});
+
 els.openCharacterLibraryButton.addEventListener("click", () => {
   openCharacterModal("library");
 });
@@ -2749,6 +3854,10 @@ characterModalTabButtons.forEach((button) => {
 
 els.characterCreateForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (demoSession) {
+    showDemoReadOnlyToast();
+    return;
+  }
   let attachedToCurrentProject = false;
   try {
     await withSubmitForm(event, async (form) => {
@@ -2784,6 +3893,10 @@ document.addEventListener("submit", async (event) => {
     return;
   }
   event.preventDefault();
+  if (demoSession) {
+    showDemoReadOnlyToast();
+    return;
+  }
   if (!state.currentProject) {
     return;
   }
@@ -2805,6 +3918,10 @@ els.generateOutlineButton.addEventListener("click", async () => {
   if (!state.currentProjectId) {
     return;
   }
+  if (demoSession) {
+    showDemoReadOnlyToast();
+    return;
+  }
   try {
     const job = await api(`/api/projects/${state.currentProjectId}/generate/outline`, {
       method: "POST",
@@ -2819,6 +3936,10 @@ els.generateOutlineButton.addEventListener("click", async () => {
 
 els.createSnapshotButton.addEventListener("click", async () => {
   if (!state.currentProject) {
+    return;
+  }
+  if (demoSession) {
+    showDemoReadOnlyToast();
     return;
   }
   try {
@@ -2838,6 +3959,10 @@ els.duplicateProjectButton.addEventListener("click", async () => {
   if (!state.currentProject) {
     return;
   }
+  if (demoSession) {
+    showDemoReadOnlyToast();
+    return;
+  }
   try {
     const payload = buildProjectDuplicatePayload(state.currentProject.title, "");
     const duplicate = await api(`/api/projects/${state.currentProject.id}/duplicate`, {
@@ -2854,6 +3979,10 @@ els.duplicateProjectButton.addEventListener("click", async () => {
 
 els.exportBundleButton.addEventListener("click", async () => {
   if (!state.currentProjectId) {
+    return;
+  }
+  if (demoSession) {
+    showDemoReadOnlyToast();
     return;
   }
   try {
@@ -2969,7 +4098,7 @@ document.addEventListener("click", async (event) => {
   }
 
   const action = target.closest(
-    "[data-open-project], [data-delete-project], [data-open-character-modal], [data-open-story-bible-modal], [data-attach-character], [data-detach-character], [data-delete-library-character], [data-close-character-modal], [data-close-story-bible-modal], [data-generate-draft], " +
+    "[data-open-project], [data-demo-sidebar-tab], [data-demo-agent-tab], [data-demo-stage-mode], [data-demo-expand-scene], [data-delete-project], [data-open-character-modal], [data-open-story-bible-modal], [data-open-character-chat], [data-close-character-chat], [data-send-character-chat], [data-quick-character-reply], [data-attach-character], [data-detach-character], [data-delete-library-character], [data-close-character-modal], [data-close-story-bible-modal], [data-generate-draft], " +
       "[data-generate-scenes], [data-generate-illustrations], [data-select-illustration], [data-mark-canonical], [data-delete-illustration], " +
       "[data-delete-export], [data-dismiss-export-banner], [data-delete-job], [data-lock-chapter], [data-select-chapter], [data-select-job], " +
       "[data-retry-intervention], [data-dismiss-intervention], [data-character-modal-tab], [data-restore-revision], [data-view-story-bible-diff], [data-view-chapter-diff], [data-edit-block], [data-save-block], [data-cancel-block], [data-toggle-block-lock], [data-edit-scene], [data-save-scene], [data-cancel-scene], [data-toggle-scene-lock], [data-edit-dialogue], [data-save-dialogue], [data-cancel-dialogue], [data-toggle-dialogue-lock], [data-retry-job]",
@@ -2980,6 +4109,63 @@ document.addEventListener("click", async (event) => {
 
   try {
     const { dataset } = action;
+
+    if (
+      demoSession &&
+      !dataset.openProject &&
+      !dataset.demoSidebarTab &&
+      !dataset.demoAgentTab &&
+      !dataset.demoStageMode &&
+      !dataset.demoExpandScene &&
+      !dataset.openCharacterModal &&
+      !dataset.openCharacterChat &&
+      dataset.closeCharacterChat === undefined &&
+      dataset.sendCharacterChat === undefined &&
+      !dataset.quickCharacterReply &&
+      dataset.openStoryBibleModal === undefined &&
+      dataset.closeCharacterModal === undefined &&
+      dataset.closeStoryBibleModal === undefined &&
+      !dataset.characterModalTab &&
+      !dataset.selectChapter &&
+      !dataset.selectJob &&
+      !dataset.selectIllustration &&
+      !dataset.viewStoryBibleDiff &&
+      !dataset.viewChapterDiff &&
+      !dataset.dismissExportBanner &&
+      !dataset.editBlock &&
+      !dataset.cancelBlock &&
+      !dataset.editScene &&
+      !dataset.cancelScene &&
+      !dataset.editDialogue &&
+      !dataset.cancelDialogue
+    ) {
+      showDemoReadOnlyToast();
+      return;
+    }
+
+    if (dataset.demoSidebarTab) {
+      state.demoSidebarTab = dataset.demoSidebarTab;
+      renderProjectWorkspace();
+      return;
+    }
+
+    if (dataset.demoAgentTab) {
+      state.demoAgentTab = dataset.demoAgentTab;
+      renderProjectWorkspace();
+      return;
+    }
+
+    if (dataset.demoStageMode) {
+      state.demoStageMode = dataset.demoStageMode;
+      renderProjectWorkspace();
+      return;
+    }
+
+    if (dataset.demoExpandScene) {
+      state.demoExpandedSceneId = state.demoExpandedSceneId === Number(dataset.demoExpandScene) ? null : Number(dataset.demoExpandScene);
+      renderProjectWorkspace();
+      return;
+    }
 
     if (dataset.openProject) {
       await navigateToWorkspace(dataset.openProject, { forceReload: true });
@@ -2993,6 +4179,27 @@ document.addEventListener("click", async (event) => {
 
     if (dataset.openStoryBibleModal !== undefined) {
       openStoryBibleModal();
+      return;
+    }
+
+    if (dataset.openCharacterChat) {
+      openCharacterChat(dataset.openCharacterChat);
+      return;
+    }
+
+    if (dataset.closeCharacterChat !== undefined) {
+      closeCharacterChat();
+      return;
+    }
+
+    if (dataset.quickCharacterReply) {
+      state.characterChatDraft = dataset.quickCharacterReply;
+      renderCharacterChat();
+      return;
+    }
+
+    if (dataset.sendCharacterChat !== undefined) {
+      sendCharacterChatMessage();
       return;
     }
 
@@ -3014,6 +4221,17 @@ document.addEventListener("click", async (event) => {
 
     if (dataset.selectChapter) {
       state.activeChapterId = Number(dataset.selectChapter);
+      const nextChapter = getActiveChapter();
+      const expandedSceneStillExists = nextChapter?.scenes?.some(
+        (scene) => Number(scene.id) === Number(state.demoExpandedSceneId || 0),
+      );
+      if (!expandedSceneStillExists) {
+        state.demoExpandedSceneId = null;
+      }
+      if (demoSession) {
+        renderProjectWorkspace();
+        return;
+      }
       await loadChapterRevisions(state.activeChapterId);
       renderProjectWorkspace();
       return;
@@ -3447,10 +4665,11 @@ document.addEventListener("click", async (event) => {
 
 setAuthMode("register");
 updateAuthUI();
+applyDemoBadge();
 ensureWorkspaceObserver();
 window.addEventListener("resize", syncWorkspaceMode);
 window.addEventListener("hashchange", () => {
-  if (!state.token) {
+  if (!state.token && !demoSession) {
     return;
   }
   syncStudioRoute().catch((error) => {
@@ -3460,7 +4679,7 @@ window.addEventListener("hashchange", () => {
 syncWorkspaceMode();
 window.visualViewport?.addEventListener("resize", syncWorkspaceMetrics);
 
-if (state.token) {
+if (state.token || demoSession) {
   loadProjects().catch((error) => {
     clearSession();
     updateAuthUI();

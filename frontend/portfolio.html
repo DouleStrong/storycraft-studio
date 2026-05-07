@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StoryCraft Studio | AI 原生互动叙事产品案例</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="portfolio-body">
+    <main class="portfolio-shell">
+      <header class="portfolio-nav">
+        <a class="portfolio-brand" href="./portfolio.html" aria-label="返回案例页顶部">
+          <span aria-hidden="true">S</span>
+          <strong>StoryCraft Studio</strong>
+        </a>
+        <nav aria-label="案例页导航">
+          <a href="#demo-walkthrough">项目演示</a>
+          <a href="#output-loop">证据链</a>
+          <a href="#background">产品动机</a>
+          <a href="#innovation">创新点</a>
+          <a href="#competitors">竞品观察</a>
+          <a href="#product-definition">产品定义</a>
+          <a href="#evaluation">测试集</a>
+          <a href="./index.html?demo=1" data-demo-entry>体验 Demo</a>
+        </nav>
+      </header>
+
+      <section class="portfolio-hero">
+        <div class="portfolio-hero-copy">
+          <p class="portfolio-kicker">AI 原生互动叙事产品案例</p>
+          <h1>剧情与智能 NPC 对话生产后台</h1>
+          <p>
+            StoryCraft Studio 不是单纯的聊天机器人，而是面向互动叙事内容生产的一套原型：它把世界观、章节、角色、AI
+            生成、Reviewer 审校和 NPC 单聊体验连在一起，让创作者能更快验证一个角色是否“像自己”、一段剧情是否可玩、一次对话是否值得继续。
+          </p>
+          <div class="portfolio-hero-actions">
+            <a class="portfolio-primary-link" href="./index.html?demo=1" data-demo-entry>体验智能 NPC 对话 Demo</a>
+            <a class="portfolio-secondary-link" href="#competitors">查看产品思考</a>
+          </div>
+          <p class="portfolio-local-demo-hint" data-local-demo-hint>
+            本地预览时，请先在 frontend 目录运行 <code>python -m http.server 5500</code>，再打开
+            <a href="http://127.0.0.1:5500/index.html?demo=1" data-local-demo-entry>本地服务版 Demo</a>。
+          </p>
+        </div>
+        <aside class="portfolio-demo-frame" aria-label="StoryCraft Studio Demo 预览">
+          <div class="portfolio-demo-topbar">
+            <span></span>
+            <span></span>
+            <span></span>
+            <strong>智能 NPC 工作台</strong>
+          </div>
+          <div class="portfolio-demo-grid">
+            <div class="portfolio-demo-sidebar">
+              <b>章节</b>
+              <b>角色</b>
+              <b>世界</b>
+            </div>
+            <div class="portfolio-demo-main">
+              <span>第 1 章 · 入学试炼</span>
+              <strong>从剧情生产进入角色单聊</strong>
+              <p>点击角色头像后进入单独聊天界面，系统根据人设、情绪、记忆标签、好感度和玩家意图生成差异化回复。</p>
+            </div>
+            <div class="portfolio-demo-agent">
+              <span>AI Agent</span>
+              <p>生成任务队列</p>
+              <p>Reviewer 待处理</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="portfolio-evidence-grid" aria-label="产品判断概览">
+        <article>
+          <span>用户场景</span>
+          <strong>游戏内容团队的原型验证</strong>
+          <p>当章节、角色和对话分支很多时，团队需要先用低成本方式验证“这段互动是否成立”。</p>
+        </article>
+        <article>
+          <span>产品假设</span>
+          <strong>智能 NPC 需要生产后台约束</strong>
+          <p>只给角色接入大模型不够，必须补上人设资料、关系状态、上下文管理和质量验收。</p>
+        </article>
+        <article>
+          <span>可体验原型</span>
+          <strong>从后台到玩家体验的闭环</strong>
+          <p>Demo 同时展示剧情生产链路和角色单聊入口，避免只停留在静态文档或概念图。</p>
+        </article>
+      </section>
+
+      <section id="demo-walkthrough" class="portfolio-section portfolio-demo-walkthrough">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">Demo Walkthrough</p>
+          <h2>项目演示：按一条体验路径理解产品能力</h2>
+        </div>
+        <div class="portfolio-walkthrough-grid">
+          <article>
+            <span>01</span>
+            <h3>进入剧情生产后台</h3>
+            <p>先从展示版工作台进入《魔法学院伙伴 Demo》，理解章节、角色、世界观和 AI 任务队列如何组织在一个后台里。</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>查看章节与场景</h3>
+            <p>浏览第 1 章的场景目标、对白片段和 Reviewer 建议，观察系统如何把剧情拆成可检查的内容单元。</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>点击角色头像进入 NPC 单聊</h3>
+            <p>从角色卡进入单聊界面，重点观察好感度、记忆标签、情绪如何影响回复，而不是只看单句生成效果。</p>
+          </article>
+          <article>
+            <span>04</span>
+            <h3>查看 AI Agent / Reviewer</h3>
+            <p>回到右侧面板查看 AI Agent / Reviewer 的状态，理解这个产品如何把生成、审校和体验验收连成闭环。</p>
+          </article>
+        </div>
+        <div class="portfolio-demo-task">
+          <div>
+            <strong>建议体验任务</strong>
+            <p>请尝试和薇岚导师对话，分别询问规则、表达困惑、请求陪伴，观察 NPC 回复是否在语气、信息密度和关系反馈上出现差异。</p>
+          </div>
+          <a class="portfolio-primary-link" href="./index.html?demo=1" data-demo-entry>开始体验 Demo</a>
+        </div>
+      </section>
+
+      <section id="output-loop" class="portfolio-section portfolio-output-loop">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">AI PM Evidence Loop</p>
+          <h2>闭环输出：不是功能陈列，而是把 Why / How / Evaluation 讲完整</h2>
+        </div>
+        <div class="portfolio-loop-grid">
+          <article>
+            <span>Why</span>
+            <h3>为什么做</h3>
+            <p>从“智能 NPC 很有趣”收敛到一个更具体的问题：内容团队如何低成本验证 NPC 是否有人设、记忆、关系反馈和剧情边界。</p>
+          </article>
+          <article>
+            <span>How</span>
+            <h3>如何做</h3>
+            <p>把产品拆成剧情生产后台、角色资料、单聊体验、AI Agent、Reviewer 和评测集，而不是只做一个孤立聊天窗口。</p>
+          </article>
+          <article>
+            <span>Eval</span>
+            <h3>怎么判断好不好</h3>
+            <p>用人设一致性、意图识别、好感度反馈、上下文延续和安全边界做测试集，并把失败样本反推到 Prompt 与产品流程。</p>
+          </article>
+        </div>
+        <div class="portfolio-insight-grid">
+          <article>
+            <strong>黑客级输入</strong>
+            <p>不仅观察竞品页面，还拆解它们可能依赖的角色记忆、上下文注入、Agent 调度和评测方式，形成自己的产品取舍。</p>
+          </article>
+          <article>
+            <strong>技术取舍</strong>
+            <p>Demo 阶段优先证明“生产后台 + 单聊体验 + Reviewer 验收”闭环，暂不追求实时语音、3D 引擎接入和大规模多人协作。</p>
+          </article>
+          <article>
+            <strong>可评测输出</strong>
+            <p>每个核心能力都要能被提问、被打分、被复盘，避免作品只停留在“看起来像 AI 产品”的表层展示。</p>
+          </article>
+          <article>
+            <strong>踩坑与迭代</strong>
+            <p>把回复单一、头像遮挡、Demo 入口落到登录页、Figma 宽度不齐等问题记录为迭代证据，体现推进落地的过程。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="background" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">01 · 产品动机</p>
+          <h2>为什么做这个产品</h2>
+        </div>
+        <div class="portfolio-two-column">
+          <article>
+            <h3>用户场景</h3>
+            <p>
+              参考《洛克王国：世界》这类陪伴与探索感较强的游戏，玩家期待 NPC 既能提供任务信息，又能表现出记忆、情绪和关系变化。对内容团队来说，
+              难点不只是“写一句回复”，而是持续维护角色一致性、剧情上下文和多轮互动质量。
+            </p>
+          </article>
+          <article>
+            <h3>产品假设</h3>
+            <p>
+              如果把 NPC 对话生产拆成“设定输入、场景生成、角色回应、Reviewer 审校、单聊体验”五段链路，创作者就能在上线前更早发现问题：
+              人设是否漂移、回复是否单一、好感度反馈是否可信、剧情信息是否自然露出。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="innovation" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">02 · 产品创新点</p>
+          <h2>不只做聊天，而是做可验收的智能 NPC 生产闭环</h2>
+        </div>
+        <div class="portfolio-card-list">
+          <article>
+            <span>创新点 1</span>
+            <h3>生产后台 + 玩家单聊联动</h3>
+            <p>后台沉淀章节、场景、角色和世界观，玩家侧用角色头像进入单聊，用真实交互反向检验内容是否可用。</p>
+          </article>
+          <article>
+            <span>创新点 2</span>
+            <h3>好感度与记忆标签参与回复</h3>
+            <p>同一个问题会受到关系阶段、当前情绪、历史记忆和玩家意图影响，避免 NPC 只输出通用回答。</p>
+          </article>
+          <article>
+            <span>创新点 3</span>
+            <h3>AI Reviewer 作为质量闸口</h3>
+            <p>Reviewer 不只判断语句是否通顺，还检查人设一致性、信息密度、互动目标和剧情安全边界。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="competitors" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">03 · 竞品观察</p>
+          <h2>类似产品给我的启发与差异化定位</h2>
+        </div>
+        <div class="portfolio-competitor-grid">
+          <article>
+            <span>Inworld AI</span>
+            <h3>更偏实时语音与智能体基础设施</h3>
+            <p>启发点是实时对话、用户上下文和工具调用；StoryCraft 更聚焦剧情生产过程与 NPC 对话验收。</p>
+            <a href="https://inworld.ai/" target="_blank" rel="noreferrer">查看参考</a>
+          </article>
+          <article>
+            <span>Convai</span>
+            <h3>更偏 3D 角色与虚拟世界接入</h3>
+            <p>启发点是角色心智、长记忆、情绪和引擎集成；StoryCraft 当前先解决内容团队如何管理和评测对话。</p>
+            <a href="https://convai.com/" target="_blank" rel="noreferrer">查看参考</a>
+          </article>
+          <article>
+            <span>AI Dungeon</span>
+            <h3>更偏开放式 AI 文本冒险</h3>
+            <p>启发点是玩家自由输入驱动叙事；StoryCraft 更强调可控剧情、角色边界和可复用内容资产。</p>
+            <a href="https://aidungeon.com/" target="_blank" rel="noreferrer">查看参考</a>
+          </article>
+          <article>
+            <span>Scenario</span>
+            <h3>更偏美术资产与创意工作流</h3>
+            <p>启发点是用创意基础设施承载团队资产；StoryCraft 的切入点是文本剧情、NPC 人设和交互质量。</p>
+            <a href="https://www.scenario.com/" target="_blank" rel="noreferrer">查看参考</a>
+          </article>
+        </div>
+        <p class="portfolio-review-copy">
+          差异化定位：StoryCraft Studio 不是替代游戏引擎，也不是泛角色聊天社区，而是给互动叙事团队使用的“剧情生产后台 +
+          智能 NPC 体验入口 + AI 评测验收台”。它的价值在于把创作、体验和质量判断放在同一个产品链路里。
+        </p>
+      </section>
+
+      <section id="technical-research" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">04 · 技术理解</p>
+          <h2>黑客级输入：把产品设计和技术边界之间的取舍说清楚</h2>
+        </div>
+        <div class="portfolio-table">
+          <div><strong>RAG 策略</strong><span>角色设定、关系阶段、记忆标签、章节目标和世界观规则应作为可检索上下文注入，避免模型只凭临场发挥回答。</span></div>
+          <div><strong>Prompt 结构</strong><span>将系统约束、角色人设、场景目标、玩家意图、可透露信息和禁止事项分层组织，降低人设漂移和剧透风险。</span></div>
+          <div><strong>Agent 架构</strong><span>Planner 负责拆解剧情目标，Writer 负责生成对白，Reviewer 负责检查质量，前端 Demo 展示任务流和待处理建议。</span></div>
+          <div><strong>模型边界</strong><span>当前展示版先证明产品链路，不承诺真实长记忆、实时语音和多模态动作生成；这些能力适合放到长期路线。</span></div>
+        </div>
+      </section>
+
+      <section id="solution" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">05 · 产品方案</p>
+          <h2>把 StoryCraft Studio 改造成剧情和 NPC 对话生产后台</h2>
+        </div>
+        <div class="portfolio-card-list">
+          <article>
+            <span>模块 1</span>
+            <h3>剧情生产工作台</h3>
+            <p>以章节、场景、角色、世界观为核心信息架构，帮助用户从宏观剧情拆解到具体 NPC 对话。</p>
+          </article>
+          <article>
+            <span>模块 2</span>
+            <h3>AI 工作流</h3>
+            <p>用 Planner、Writer、Reviewer 的协作视角展示任务队列、生成状态、审校建议和可追踪结果。</p>
+          </article>
+          <article>
+            <span>模块 3</span>
+            <h3>智能 NPC 单聊</h3>
+            <p>点击角色头像进入单聊界面，基于人设、情绪、记忆标签、好感度和玩家意图生成个性回复。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="workflow" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">06 · AI 工作流</p>
+          <h2>从生成到审校的可控链路</h2>
+        </div>
+        <div class="portfolio-timeline">
+          <article>
+            <span>输入</span>
+            <p>章节目标、角色设定、世界观规则、玩家互动意图。</p>
+          </article>
+          <article>
+            <span>生成</span>
+            <p>AI 拆解场景目标，生成 NPC 对话草稿，并保留任务状态和上下文。</p>
+          </article>
+          <article>
+            <span>审校</span>
+            <p>Reviewer 检查节奏、人设一致性、信息密度和可互动性，输出待处理建议。</p>
+          </article>
+          <article>
+            <span>体验</span>
+            <p>用户点击角色头像进入单聊，用实际对话验证智能 NPC 是否成立。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="product-definition" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">07 · 产品定义</p>
+          <h2>把想法拆成可执行、可测试、可迭代的需求</h2>
+        </div>
+        <div class="portfolio-table">
+          <div><strong>需求目标</strong><span>让用户快速完成剧情场景和 NPC 对话原型验证，并能直接进入角色单聊体验。</span></div>
+          <div><strong>核心流程</strong><span>选择章节 → 查看场景 → 展开对话 → 点击角色头像 → 进入 NPC 单聊 → 查看 AI/Reviewer 状态。</span></div>
+          <div><strong>关键字段</strong><span>角色人设、当前情绪、记忆标签、好感度、关系阶段、场景目标、审校状态。</span></div>
+          <div><strong>异常情况</strong><span>回复过于单一、人设偏移、上下文断裂、好感度反馈无感、审校建议未处理。</span></div>
+          <div><strong>验收标准</strong><span>UI 宽度对齐、角色头像不遮挡、回复多样化、核心链路可点击体验、Demo 入口直接进入展示模式。</span></div>
+        </div>
+      </section>
+
+      <section id="evaluation" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">08 · 测试集 / 评测集</p>
+          <h2>用产品化评测说明 AI 是否真的可用</h2>
+        </div>
+        <div class="portfolio-eval-grid">
+          <article>
+            <h3>人设一致性</h3>
+            <p>同一 NPC 在安抚、解释规则、推进任务时，语气和价值观是否稳定。</p>
+          </article>
+          <article>
+            <h3>意图识别</h3>
+            <p>玩家询问规则、表达情绪、请求陪伴时，回复是否能明显区分。</p>
+          </article>
+          <article>
+            <h3>好感度反馈</h3>
+            <p>回复是否体现关系阶段、记忆标签和信任程度，而不是泛泛回答。</p>
+          </article>
+          <article>
+            <h3>安全边界</h3>
+            <p>避免剧透、避免违背世界观、避免输出和当前剧情无关的信息。</p>
+          </article>
+        </div>
+        <div class="portfolio-evaluation-method">
+          <article>
+            <strong>评分方法</strong>
+            <p>每条测试问题按 1-5 分记录表现：1 分为答非所问或人设崩坏，3 分为可用但泛化，5 分为符合人设、上下文和关系状态。</p>
+          </article>
+          <article>
+            <strong>失败样本</strong>
+            <p>保留“过度解释规则”“忽略玩家情绪”“好感度反馈无差异”等失败样本，避免只展示成功回复。</p>
+          </article>
+          <article>
+            <strong>改进动作</strong>
+            <p>从评测到迭代：失败样本会回到 Prompt 结构、角色记忆字段、Reviewer 检查项和单聊交互提示里继续优化。</p>
+          </article>
+          <article>
+            <strong>A/B 对照</strong>
+            <p>保留 A 模型或原始 Prompt 与 B 方案 的对比，说明调整后在人设一致性和意图识别上的提升。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="roadmap" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">09 · 产品路线</p>
+          <h2>下一轮迭代应该优先补强什么</h2>
+        </div>
+        <div class="portfolio-delivery-grid">
+          <article>
+            <strong>已完成</strong>
+            <p>中文化、Figma 对齐、NPC 单聊入口、示例对话、任务队列和 Reviewer 面板展示。</p>
+          </article>
+          <article>
+            <strong>下一轮</strong>
+            <p>补充可编辑测试集、更多角色意图样本、单聊记录回流到角色记忆的交互。</p>
+          </article>
+          <article>
+            <strong>长期方向</strong>
+            <p>接入真实模型评测、多人协作审校、游戏引擎导出格式和玩家行为数据看板。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="review" class="portfolio-section">
+        <div class="portfolio-section-head">
+          <p class="portfolio-kicker">10 · 产品复盘</p>
+          <h2>这个产品最值得强调的判断</h2>
+        </div>
+        <p class="portfolio-review-copy">
+          智能 NPC 的核心不只是“能聊天”，而是能在明确的人设、关系、剧情目标和安全边界内持续回应玩家。StoryCraft Studio
+          的产品价值在于把 AI 生成能力放进可控工作流里：前台让用户感知角色，后台让创作者管理内容，评测集让团队判断 AI 是否真的能用于互动叙事。
+        </p>
+      </section>
+    </main>
+    <script>
+      (() => {
+        const localDemoUrl = "http://127.0.0.1:5500/index.html?demo=1";
+        if (window.location.protocol === "file:") {
+          document.querySelectorAll("[data-demo-entry]").forEach((link) => {
+            link.setAttribute("href", localDemoUrl);
+          });
+          document.querySelectorAll("[data-local-demo-hint]").forEach((hint) => {
+            hint.hidden = false;
+          });
+          return;
+        }
+        document.querySelectorAll("[data-local-demo-hint]").forEach((hint) => {
+          hint.hidden = true;
+        });
+      })();
+    </script>
+  </body>
+</html>
