@@ -11,7 +11,12 @@
       (() => {
         const params = new URLSearchParams(window.location.search);
         const demoValues = new Set(["1", "true", "showcase", "demo"]);
-        if (demoValues.has(String(params.get("demo") || "").trim().toLowerCase())) {
+        const isDemoRequest = demoValues.has(String(params.get("demo") || "").trim().toLowerCase());
+        if (!isDemoRequest && !window.location.hash) {
+          window.location.replace("./portfolio.html");
+          return;
+        }
+        if (isDemoRequest) {
           document.body.dataset.demoBoot = "pending";
           document.body.setAttribute("data-demo-protocol", window.location.protocol === "file:" ? "file" : "server");
         }

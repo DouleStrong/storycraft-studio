@@ -88,6 +88,7 @@ test("index has a module-free demo boot fallback instead of exposing login first
   assert.match(indexHtml, /data-demo-protocol/);
   assert.match(indexHtml, /demoBootFallback/);
   assert.match(indexHtml, /URLSearchParams\(window\.location\.search\)/);
+  assert.match(indexHtml, /window\.location\.replace\("\.\/portfolio\.html"\)/);
   assert.match(indexHtml, /window\.location\.protocol === "file:"/);
   assert.match(indexHtml, /authPanel\.classList\.add\("hidden"\)/);
   assert.match(indexHtml, /http:\/\/127\.0\.0\.1:5500\/index\.html\?demo=1/);
